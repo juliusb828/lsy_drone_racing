@@ -171,7 +171,6 @@ class TrajectoryController(Controller):
                 )
                 if target_gate==3 and pos_close_to_gate_2:
                     extra_point = self.last_extra_point
-                    #print(f"extra_point at {extra_point}")
                     waypoints.append(extra_point)
                 waypoints.append(entry)
                 waypoints.append(exit)
@@ -183,7 +182,6 @@ class TrajectoryController(Controller):
                 if is_gate_3:
                     extra_point = exit - 0.7*sideways
                     self.last_extra_point = extra_point
-                    #print(f"extra_point at {extra_point}")
                     waypoints.append(extra_point)
                 
 
@@ -204,7 +202,6 @@ class TrajectoryController(Controller):
         self.trajectory_history.append(waypoints.copy())
         #print("Trajectory recomputed. Plotting...")
         #self.plot_all_trajectories()
-
         return interp1d(t, waypoints, kind='linear', axis=0, fill_value='extrapolate')
 
     
