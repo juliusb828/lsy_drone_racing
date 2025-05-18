@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 #added imports
 from scipy.spatial.transform import Rotation as R
 from scipy.interpolate import interp1d
-#import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 
 def add_detours_around_obstacles(waypoints, obstacles, safety_radius=0.15):
     def point_line_distance_2d(p, a, b):
@@ -108,6 +108,8 @@ class TrajectoryController(Controller):
 
         self.last_known_gates_pos = obs["gates_pos"]
         self.last_known_obstacles_pos = obs["obstacles_pos"]
+
+        self.last_extra_point = None
         
         self.trajectory_history = []
         self.trajectory_history.append(waypoints.copy())
@@ -133,8 +135,6 @@ class TrajectoryController(Controller):
         target_gate = obs["target_gate"]
         self.gates_passed = np.zeros(4, dtype=bool)
         self.gates_passed[:target_gate] = True
-        print(self.gates_passed)
-
 
         if not np.allclose(obs["gates_pos"], self.last_known_gates_pos, atol=0.001):
             print("GATE POSITION CHANGED, RECOMPUTE TRAJECTORY!!!")
@@ -162,25 +162,29 @@ class TrajectoryController(Controller):
             if not gate_passed:
                 rot = R.from_quat(gate_quat).as_matrix()
                 fwd = rot[:, 1]
+                sideways = rot[:, 0]
                 entry = gate_pos - 0.2 * fwd
                 exit = gate_pos + 0.2 * fwd
+                pos_close_to_gate_2 = (
+                    abs(pos[0] - 0.0) <= 0.3 and
+                    abs(pos[1] - 1.0) <= 0.3 and
+                    abs(pos[2] - 0.56) <= 0.2
+                )
+                if target_gate==3 and pos_close_to_gate_2:
+                    extra_point = self.last_extra_point
+                    print(f"extra_point at {extra_point}")
+                    waypoints.append(extra_point)
                 waypoints.append(entry)
                 waypoints.append(exit)
-                is_gate_2 = (
+                is_gate_3 = (
                     abs(gate_pos[0] - 0.0) <= 0.15 and
                     abs(gate_pos[1] - 1.0) <= 0.15 and
                     abs(gate_pos[2] - 0.56) <= 0.1
                 )
-                pos_close_to_gate_2 = (
-                    abs(pos[0] - 0.0) <= 0.15 and
-                    abs(pos[1] - 1.0) <= 0.15 and
-                    abs(pos[2] - 0.56) <= 0.1
-                )
-                if is_gate_2 or (target_gate==3 and pos_close_to_gate_2):
-                    #pos = [0.0, 1.0, 0.56]
-                    sideways = rot[:, 0]
+                if is_gate_3:
                     extra_point = exit - 0.7*sideways
-                    print(f"extra_point is {extra_point}")
+                    self.last_extra_point = extra_point
+                    print(f"extra_point at {extra_point}")
                     waypoints.append(extra_point)
                 
 
@@ -198,27 +202,24 @@ class TrajectoryController(Controller):
         if np.any(np.diff(t) <= 0):
             t += np.linspace(0, 1e-3, len(t))  # ensure strict monotonicity
 
-        # Create safe trajectory function
         self.trajectory_history.append(waypoints.copy())
-        #print("Trajectory recomputed. Plotting...")
+        print("Trajectory recomputed. Plotting...")
         #self.plot_all_trajectories()
 
         return interp1d(t, waypoints, kind='linear', axis=0, fill_value='extrapolate')
 
     
-    #def plot_all_trajectories(self):
-#
+#    def plot_all_trajectories(self):
 #        plt.figure(figsize=(10, 8))
 #        for i, wp in enumerate(self.trajectory_history):
 #            if isinstance(wp, dict):
 #                wp = wp["waypoints"]
 #            x, y = wp[:, 0], wp[:, 1]
-#            plt.plot(x, y, '-o', label=f'Trajectory {i+1}')
+#           plt.plot(x, y, '-o', label=f'Trajectory {i+1}')
 #
 #        if hasattr(self, "last_known_obstacles_pos") and self.last_known_obstacles_pos is not None:
 #            obs = self.last_known_obstacles_pos
 #            plt.scatter(obs[:, 0], obs[:, 1], color='black', marker='X', s=100, label='Obstacles')
-#
 #        plt.title("All Recomputed Trajectories")
 #        plt.xlabel("X")
 #        plt.ylabel("Y")
