@@ -96,7 +96,7 @@ class TrajectoryController(Controller):
             waypoints.append(exit)
         waypoints = np.array(waypoints)
         waypoints = add_detours_around_obstacles(waypoints, obstacles_pos)
-        print(waypoints)
+        #print(waypoints)
         self.t_total = 26  # total time duration
         t = np.linspace(0, self.t_total, len(waypoints))  # parameter vector
         # Create piecewise linear interpolator for each dimension
@@ -137,12 +137,12 @@ class TrajectoryController(Controller):
         self.gates_passed[:target_gate] = True
 
         if not np.allclose(obs["gates_pos"], self.last_known_gates_pos, atol=0.001):
-            print("GATE POSITION CHANGED, RECOMPUTE TRAJECTORY!!!")
+            #print("GATE POSITION CHANGED, RECOMPUTE TRAJECTORY!!!")
             self.last_known_gates_pos = obs["gates_pos"]
             self.trajectory = self.recompute_trajectory(obs["pos"], obs["gates_pos"], obs["gates_quat"], obs["obstacles_pos"], tau, target_gate)
 
         if not np.allclose(obs["obstacles_pos"], self.last_known_obstacles_pos, atol=0.001):
-            print("OBSTACLE POSITION CHANGED, RECOMPUTE TRAJECTORY!!!")
+            #print("OBSTACLE POSITION CHANGED, RECOMPUTE TRAJECTORY!!!")
             self.last_known_obstacles_pos = obs["obstacles_pos"]
             self.trajectory = self.recompute_trajectory(obs["pos"], obs["gates_pos"], obs["gates_quat"], obs["obstacles_pos"], tau, target_gate)
 
@@ -157,7 +157,6 @@ class TrajectoryController(Controller):
     
     def recompute_trajectory(self, pos, gates_pos, gates_quat, obstacles_pos, tau, target_gate):
         waypoints = [[pos[0], pos[1], pos[2]]]
-        print("start of recomputation")
         for gate_pos, gate_quat, gate_passed in zip(gates_pos, gates_quat, self.gates_passed):
             if not gate_passed:
                 rot = R.from_quat(gate_quat).as_matrix()
@@ -172,7 +171,7 @@ class TrajectoryController(Controller):
                 )
                 if target_gate==3 and pos_close_to_gate_2:
                     extra_point = self.last_extra_point
-                    print(f"extra_point at {extra_point}")
+                    #print(f"extra_point at {extra_point}")
                     waypoints.append(extra_point)
                 waypoints.append(entry)
                 waypoints.append(exit)
@@ -184,7 +183,7 @@ class TrajectoryController(Controller):
                 if is_gate_3:
                     extra_point = exit - 0.7*sideways
                     self.last_extra_point = extra_point
-                    print(f"extra_point at {extra_point}")
+                    #print(f"extra_point at {extra_point}")
                     waypoints.append(extra_point)
                 
 
@@ -203,7 +202,7 @@ class TrajectoryController(Controller):
             t += np.linspace(0, 1e-3, len(t))  # ensure strict monotonicity
 
         self.trajectory_history.append(waypoints.copy())
-        print("Trajectory recomputed. Plotting...")
+        #print("Trajectory recomputed. Plotting...")
         #self.plot_all_trajectories()
 
         return interp1d(t, waypoints, kind='linear', axis=0, fill_value='extrapolate')
