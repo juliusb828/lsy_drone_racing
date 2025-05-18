@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 #added imports
 from scipy.spatial.transform import Rotation as R
 from scipy.interpolate import interp1d
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 
 def add_detours_around_obstacles(waypoints, obstacles, safety_radius=0.15):
     def point_line_distance_2d(p, a, b):
@@ -200,35 +200,34 @@ class TrajectoryController(Controller):
 
         # Create safe trajectory function
         self.trajectory_history.append(waypoints.copy())
-        print("Trajectory recomputed. Plotting...")
-        self.plot_all_trajectories()
+        #print("Trajectory recomputed. Plotting...")
+        #self.plot_all_trajectories()
 
         return interp1d(t, waypoints, kind='linear', axis=0, fill_value='extrapolate')
 
     
-    def plot_all_trajectories(self):
+    #def plot_all_trajectories(self):
+#
+#        plt.figure(figsize=(10, 8))
+#        for i, wp in enumerate(self.trajectory_history):
+#            if isinstance(wp, dict):
+#                wp = wp["waypoints"]
+#            x, y = wp[:, 0], wp[:, 1]
+#            plt.plot(x, y, '-o', label=f'Trajectory {i+1}')
+#
+#        if hasattr(self, "last_known_obstacles_pos") and self.last_known_obstacles_pos is not None:
+#            obs = self.last_known_obstacles_pos
+#            plt.scatter(obs[:, 0], obs[:, 1], color='black', marker='X', s=100, label='Obstacles')
+#
+#        plt.title("All Recomputed Trajectories")
+#        plt.xlabel("X")
+#        plt.ylabel("Y")
+#        plt.axis('equal')
+#        plt.grid(True)
+#        plt.legend()
+#        plt.savefig("trajectory_debug_plot.png")
+#        plt.close()
 
-        plt.figure(figsize=(10, 8))
-        for i, wp in enumerate(self.trajectory_history):
-            if isinstance(wp, dict):
-                wp = wp["waypoints"]
-            x, y = wp[:, 0], wp[:, 1]
-            plt.plot(x, y, '-o', label=f'Trajectory {i+1}')
-
-        if hasattr(self, "last_known_obstacles_pos") and self.last_known_obstacles_pos is not None:
-            obs = self.last_known_obstacles_pos
-            plt.scatter(obs[:, 0], obs[:, 1], color='black', marker='X', s=100, label='Obstacles')
-
-        plt.title("All Recomputed Trajectories")
-        plt.xlabel("X")
-        plt.ylabel("Y")
-        plt.axis('equal')
-        plt.grid(True)
-        plt.legend()
-        plt.savefig("trajectory_debug_plot.png")
-        plt.close()
-
-    
 
     def step_callback(
         self,
