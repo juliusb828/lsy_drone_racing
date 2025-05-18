@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 #added imports
 from scipy.spatial.transform import Rotation as R
 from scipy.interpolate import interp1d
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 
 def add_detours_around_obstacles(waypoints, obstacles, safety_radius=0.15):
     def point_line_distance_2d(p, a, b):
