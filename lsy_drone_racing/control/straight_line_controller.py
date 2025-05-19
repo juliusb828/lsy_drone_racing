@@ -97,7 +97,7 @@ class TrajectoryController(Controller):
         waypoints = np.array(waypoints)
         waypoints = add_detours_around_obstacles(waypoints, obstacles_pos)
         #print(waypoints)
-        self.t_total = 18  # total time duration
+        self.t_total = 15  # total time duration
         t = np.linspace(0, self.t_total, len(waypoints))  # parameter vector
         # Create piecewise linear interpolator for each dimension
         self.trajectory = interp1d(t, waypoints, kind='linear', axis=0)
