@@ -41,9 +41,10 @@ class TrajectoryController(Controller):
         # Same waypoints as in the trajectory controller. Determined by trial and error.
 
         # nominal gate positions
-        self.do_PID = False
+        self.do_PID = True
         self.do_plot = True
         self.nominal_gates = config["env.track.gates"]
+        print(f"gates at init: {self.nominal_gates}")
         self.gate_positions_nominal = np.array([gate['pos'] for gate in self.nominal_gates])
         self.last_gate_positions = np.copy(self.gate_positions_nominal)
         self.waypoints = np.array(
@@ -118,39 +119,11 @@ class TrajectoryController(Controller):
 
         ## Plotting
         if self.do_plot:
-            self.fig, self.ax = plt.subplots(figsize=(8, 6))
-
-            # plot the waypoints
-            self.waypoint_scatter = self.ax.scatter(self.waypoints[:, 0], self.waypoints[:, 1], color='red', label='Waypoints')
-            self.gatepositions_scatter = self.ax.scatter(self.gate_positions_nominal[:,0], self.gate_positions_nominal[:,1], color='green')
-            # plot the obstacles
-            self.obstacle_scatter = self.ax.scatter(x_obs, y_obs, color='black', marker='x', label='Obstacles')
-
-            # plot the computed trajectory self.trajectory
-            self.line, = self.ax.plot([], [], color='blue', label='Trajectory')
             t_fine = np.linspace(0, self.t_total, 200)  # 200 points = nice and smooth
             trajectory_points = self.trajectory(t_fine)  # shape: (200, 3), # Evaluate the spline at these times
-            x_vals = trajectory_points[:, 0] # Extract x and y coordinates (ignoring z)
-            y_vals = trajectory_points[:, 1]
-            self.line.set_data(x_vals, y_vals) # Update the line plot
-
-            self.ax.set_title('2D xy Trajectory')
-            self.ax.set_xlabel('x')
-            self.ax.set_ylabel('y')
-            self.ax.axis('equal')
-            self.ax.grid(True)
-            self.ax.legend()
-            self.fig.show()
-            self.fig.canvas.draw()
-            self.fig.canvas.flush_events()
-            plt.pause(0.1)
-
-            plt.ion()
-            plt.show(block=False)
-
-            # test with the Plotter:
-            plotter = Plotting()
-            plotter.plot_2d_trajectory(waypoints=waypoints, trajectory=trajectory_points,projection='xy', config=config)
+            
+            self.plotter = Plotting()
+            self.plotter.plot_2d_trajectory(waypoints=waypoints, trajectory=trajectory_points,projection='xy', config=config)
 
     def compute_control(
         self, obs: dict[str, NDArray[np.floating]], info: dict | None = None
@@ -205,15 +178,16 @@ class TrajectoryController(Controller):
 
             # graph:
             if self.do_plot:
-                line, = self.ax.plot([], [], color='magenta', label='Updated_Trajectory')
-                print(self.t_total)
-                t_fine = np.linspace(0, self.t_total, 200)  # 200 points = nice and smooth
-                trajectory_points = self.trajectory(t_fine)  # shape: (200, 3), # Evaluate the spline at these times
-                x_vals = trajectory_points[:, 0] # Extract X and Y coordinates (ignoring Z)
-                y_vals = trajectory_points[:, 1]
-                line.set_data(x_vals, y_vals)
-                print("Updated Trajectory graphed")
-                input("Press Enter to continue")
+                # line, = self.ax.plot([], [], color='magenta', label='Updated_Trajectory')
+                # print(self.t_total)
+                # t_fine = np.linspace(0, self.t_total, 200)  # 200 points = nice and smooth
+                # trajectory_points = self.trajectory(t_fine)  # shape: (200, 3), # Evaluate the spline at these times
+                # x_vals = trajectory_points[:, 0] # Extract X and Y coordinates (ignoring Z)
+                # y_vals = trajectory_points[:, 1]
+                # line.set_data(x_vals, y_vals)
+                # print("Updated Trajectory graphed")
+                # input("Press Enter to continue")
+                pass
 
         # check if obstacles positions changed 
         changed_indices_obs = np.where(np.any(~np.isclose(self.last_obst_positions, obst_positions, atol=1e-2), axis=1))[0]
@@ -237,11 +211,8 @@ class TrajectoryController(Controller):
 
         # Plotting: Every N steps, plot a new dot for the drone's position
         if self.do_plot:
-            if self._tick % 10 == 0:  # adjust frequency as you like
-                self.ax.scatter(current_pos[0], current_pos[1], color='blue', s=30)
-                self.fig.canvas.draw()
-                self.fig.canvas.flush_events()
-                plt.pause(0.001)
+            self.plotter.plot_drone_pos(tick=self._tick, freq=5, obs=obs)
+            
 
         # Derivative term
         derivative = (error_pos - self._prev_error_pos) * self._freq
@@ -318,16 +289,16 @@ class TrajectoryController(Controller):
 
             # graph:
             if self.do_plot:
-                line, = self.ax.plot([], [], color='cyan', label='Updated_Trajectory')
-                print(self.t_total)
-                t_fine = np.linspace(0, self.t_total, 200)  # 200 points = nice and smooth
-                trajectory_points = self.trajectory(t_fine)  # shape: (200, 3), # Evaluate the spline at these times
-                x_vals = trajectory_points[:, 0] # Extract X and Y coordinates (ignoring Z)
-                y_vals = trajectory_points[:, 1]
-                line.set_data(x_vals, y_vals)
-                print("Updated Trajectory graphed")
-                input("Press Enter to continue")
-            
+                # line, = self.ax.plot([], [], color='cyan', label='Updated_Trajectory')
+                # print(self.t_total)
+                # t_fine = np.linspace(0, self.t_total, 200)  # 200 points = nice and smooth
+                # trajectory_points = self.trajectory(t_fine)  # shape: (200, 3), # Evaluate the spline at these times
+                # x_vals = trajectory_points[:, 0] # Extract X and Y coordinates (ignoring Z)
+                # y_vals = trajectory_points[:, 1]
+                # line.set_data(x_vals, y_vals)
+                # print("Updated Trajectory graphed")
+                # input("Press Enter to continue")
+                pass
      
     def step_callback(
         self,
