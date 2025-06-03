@@ -4,6 +4,8 @@ import itertools
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
+import matplotlib.patches as patches
+from scipy.spatial.transform import Rotation as R
 
 
 class Plotting:
@@ -44,7 +46,7 @@ class Plotting:
             save:bool=True):
         """Plots the planned 2D trajectory.
 
-        Args:plt.subplots()
+        Args:
             waypoints: Waypoints used for planning.
             trajectory: The planned trajectory.
             projection: Which 2D plane to project onto ('xy', 'xz', or 'yz').
@@ -90,7 +92,21 @@ class Plotting:
             if show_obstacles:
                 obstacles = config["env.track.obstacles"]
                 obstacles_pos = np.array([obstacle['pos'] for obstacle in obstacles])
-                ax.scatter(obstacles_pos[:, i], obstacles_pos[:, j], color='black', marker='x', label='Obstacles')
+                ax.scatter(obstacles_pos[:, i], obstacles_pos[:, j], color='grey', marker='x', label='Obstacles')
+
+                # plot unceratainty rectangles
+                if projection == 'xy':
+                    for pos in obstacles_pos:
+                        rect = patches.Rectangle(
+                            (pos[0] - 0.15, pos[1] - 0.15),  # bottom-left corner
+                            0.3,  # width
+                            0.3,  # height
+                            linewidth=1,
+                            edgecolor='gray',
+                            facecolor='gray',
+                            alpha=0.3  # transparency
+                            )
+                        ax.add_patch(rect)
 
         if waypoints is not None:
             self.scatter_waypoints = ax.scatter(waypoints[:, i], waypoints[:, j], color='red', label='Waypoints')
@@ -154,8 +170,7 @@ class Plotting:
 
                 self.fig_2d.canvas.draw_idle()
                 plt.pause(0.001)
-                print(f'Drone position @ {current_pos} graphed.')
-
+            
         # save into a PNG
         if self.save and tick % freq*10 == 0: 
             filename = f"{self.projection}_trajectory.png"
@@ -171,7 +186,7 @@ class Plotting:
         remove_previous:bool=False
         ):
         """
-        Given new waypoints, or a new trajectory, updates the trajectory plot.
+        Given new waypoints, gate_positions, obstacles, or a new trajectory, updates the trajectory plot.
 
         Args:
             waypoints: (updated) waypoints used for planning.
@@ -193,6 +208,33 @@ class Plotting:
             if remove_previous:
                 self.line_actual.remove()
             self.line_actual, = ax.plot(trajectory[:, i], trajectory[:, j], '-', color=color, label=label)
+
+        if obs is not None:
+
+            # plot update obstacle positions
+            obstacles_pos = obs['obstacles_pos']
+            ax.scatter(obstacles_pos[:,i], obstacles_pos[:,j], color='grey', marker='x', label='Updates obstacles')
+            ax.scatter(obstacles_pos[:, i], obstacles_pos[:, j], color='grey', marker='*', label='Obstacles')
+
+            # plot updated gates
+            gate_positions = obs['gates_pos']
+            gates_quat = obs['gates_quat']
+            ax.scatter(gate_positions[:,i], gate_positions[:,j], color='grey', label='Updated Gates')
+
+            length = 0.3  # total gate length
+            half_len = length / 2
+
+            if self.projection == 'xy':
+                for pos, quat in zip(gate_positions, gates_quat):
+                    #rot = R.from_quat(quat).as_matrix()
+                    yaw = R.from_quat(quat).as_euler('zyx')[0] 
+
+                    dx = np.cos(yaw) * half_len
+                    dy = np.sin(yaw) * half_len
+                    x0, y0 = pos[0] - dx, pos[1] - dy
+                    x1, y1 = pos[0] + dx, pos[1] + dy
+
+                    ax.plot([x0, x1], [y0, y1], color='grey', linewidth=2)
 
 
     def plot_position_error(self, trajectory, obs):

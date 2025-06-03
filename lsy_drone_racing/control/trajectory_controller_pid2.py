@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import CubicSpline
+from scipy.interpolate import make_interp_spline
 
 from lsy_drone_racing.control import Controller
 from lsy_drone_racing.control.plotting import Plotting 
@@ -65,21 +66,21 @@ class TrajectoryController(Controller):
                 [-0.5, -0.5, 1.1],
             ]
         )
-        waypoints = np.array(
-            [
-                #np.array(obs['pos']),
-                [1.0, 1.5, 0.05],
-                [0.8, 1.0, 0.2],
-                [0.55, -0.3, 0.5],
-                [0.2, -1.3, 0.65],
-                [1.1, -0.85, 1.1],
-                [0.2, 0.5, 0.65],
-                [0.0, 1.2, 0.525],
-                [0.0, 1.2, 1.1],
-                [-0.5, 0.0, 1.1],
-                [-0.5, -0.5, 1.1],
-            ]
-        )
+        # waypoints = np.array(
+        #     [
+        #         #np.array(obs['pos']),
+        #         [1.0, 1.5, 0.05],
+        #         [0.8, 1.0, 0.2],
+        #         [0.55, -0.3, 0.5],
+        #         [0.2, -1.3, 0.65],
+        #         [1.1, -0.85, 1.1],
+        #         [0.2, 0.5, 0.65],
+        #         [0.0, 1.2, 0.525],
+        #         [0.0, 1.2, 1.1],
+        #         [-0.5, 0.0, 1.1],
+        #         [-0.5, -0.5, 1.1],
+        #     ]
+        # )
         self.gate_to_waypoint_idx = {
         0: 4,
         1: 6,
@@ -103,13 +104,16 @@ class TrajectoryController(Controller):
 
         self.t_total = 11
         t = np.linspace(0, self.t_total, len(self.waypoints))
-        self.trajectory = CubicSpline(t, self.waypoints)
+        #self.trajectory = CubicSpline(t, self.waypoints)
+        self.trajectory = make_interp_spline(t, self.waypoints, k=3)
         self._tick = 0
         self._freq = config.env.freq
         self._finished = False
-        self._Kp = 1.2
+        self._Kp = 4.0
+        #self._Kp = 2.3
         #self._Kp = np.array([2.5, 4.5, 2.0])
-        self._Kd = 0.3
+        #self._Kd = 0.3
+        self._Kd = 2.5
         #self._Kd = np.array([0.3, 0.3, 0.2])
         #self._Ki = np.array([0.3, 0.3, 0.3])
         self._Ki = 0
@@ -123,7 +127,7 @@ class TrajectoryController(Controller):
             trajectory_points = self.trajectory(t_fine)  # shape: (200, 3), # Evaluate the spline at these times
             
             self.plotter = Plotting()
-            self.plotter.plot_2d_trajectory(waypoints=waypoints, trajectory=trajectory_points,projection='xy', config=config)
+            self.plotter.plot_2d_trajectory(waypoints=self.waypoints, trajectory=trajectory_points,projection='xy', config=config)
 
     def compute_control(
         self, obs: dict[str, NDArray[np.floating]], info: dict | None = None
@@ -144,6 +148,7 @@ class TrajectoryController(Controller):
         gate_positions = obs['gates_pos']
         obst_positions = obs['obstacles_pos']
         gates_visited = obs['gates_visited']
+        #print(f"observations: {obs}")
 
         # For Level2: once the real gate position becomes available, regenerate trajectory (starting point being the current position) 
         # check for changes
@@ -178,16 +183,11 @@ class TrajectoryController(Controller):
 
             # graph:
             if self.do_plot:
-                # line, = self.ax.plot([], [], color='magenta', label='Updated_Trajectory')
-                # print(self.t_total)
-                # t_fine = np.linspace(0, self.t_total, 200)  # 200 points = nice and smooth
-                # trajectory_points = self.trajectory(t_fine)  # shape: (200, 3), # Evaluate the spline at these times
-                # x_vals = trajectory_points[:, 0] # Extract X and Y coordinates (ignoring Z)
-                # y_vals = trajectory_points[:, 1]
-                # line.set_data(x_vals, y_vals)
-                # print("Updated Trajectory graphed")
-                # input("Press Enter to continue")
-                pass
+                t_fine = np.linspace(0, self.t_total, 200)  # 200 points = nice and smooth
+                trajectory_points = self.trajectory(t_fine)  # shape: (200, 3), # Evaluate the spline at these times
+                self.plotter.update_2d_trajectory(trajectory=trajectory_points, obs=obs)
+                print("Updated Trajectory graphed")
+                input("Press Enter to continue")
 
         # check if obstacles positions changed 
         changed_indices_obs = np.where(np.any(~np.isclose(self.last_obst_positions, obst_positions, atol=1e-2), axis=1))[0]
@@ -196,7 +196,8 @@ class TrajectoryController(Controller):
 
             self.last_obst_positions = np.copy(obst_positions)
             if self.do_plot:
-                self.ax.scatter(obst_positions[:,0], obst_positions[:,1], color='black', s=30)
+                self.plotter.update_2d_trajectory(obs=obs)
+                #self.ax.scatter(obst_positions[:,0], obst_positions[:,1], color='black', s=30)
 
             # check if trajectory isn't too close to obstacles   
             self.check_obstacles(obst_positions, current_pos, current_vel, gates_visited)
@@ -204,14 +205,17 @@ class TrajectoryController(Controller):
         # Control logic
         tau = min(self._tick / self._freq, self.t_total)
         target_pos = self.trajectory(tau)
+        target_vel_ff = self.trajectory.derivative()(tau) # feedforward velocity
 
         error_pos = target_pos - current_pos
         self._error_integral += error_pos / self._freq
         print(f"At tau={tau}: error_pos={error_pos}")
 
+        error_vel = target_vel_ff - current_vel
+
         # Plotting: Every N steps, plot a new dot for the drone's position
         if self.do_plot:
-            self.plotter.plot_drone_pos(tick=self._tick, freq=5, obs=obs)
+            self.plotter.plot_drone_pos(tick=self._tick, freq=3, obs=obs)
             
 
         # Derivative term
@@ -221,8 +225,13 @@ class TrajectoryController(Controller):
         self._prev_error_pos = error_pos
 
         # PID Control
-        target_vel = self._Kp * error_pos + self._Ki * self._error_integral + self._Kd * derivative
+        #target_vel = self._Kp * error_pos + self._Ki * self._error_integral + self._Kd * derivative
         
+        # PID Control (PD + feedforward)
+        target_vel = target_vel_ff + self._Kp * error_pos + self._Kd * error_vel
+
+        # output saturation:
+
         if tau == self.t_total:  # Maximum duration reached
             self._finished = True
         if self.do_PID:
@@ -254,7 +263,7 @@ class TrajectoryController(Controller):
             if too_close:
                 break
         
-        if not too_close:
+        if True: # not too_close:
             print("Trajectory accepted.")
         elif too_close:
             # replan trajectory
@@ -291,14 +300,14 @@ class TrajectoryController(Controller):
             if self.do_plot:
                 # line, = self.ax.plot([], [], color='cyan', label='Updated_Trajectory')
                 # print(self.t_total)
-                # t_fine = np.linspace(0, self.t_total, 200)  # 200 points = nice and smooth
-                # trajectory_points = self.trajectory(t_fine)  # shape: (200, 3), # Evaluate the spline at these times
+                t_fine = np.linspace(0, self.t_total, 200)  # 200 points = nice and smooth
+                trajectory_points = self.trajectory(t_fine)  # shape: (200, 3), # Evaluate the spline at these times
                 # x_vals = trajectory_points[:, 0] # Extract X and Y coordinates (ignoring Z)
                 # y_vals = trajectory_points[:, 1]
                 # line.set_data(x_vals, y_vals)
-                # print("Updated Trajectory graphed")
-                # input("Press Enter to continue")
-                pass
+                self.plotter.update_2d_trajectory(trajectory=trajectory_points)
+                print("Updated Trajectory graphed")
+                input("Press Enter to continue")
      
     def step_callback(
         self,
