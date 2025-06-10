@@ -4,7 +4,7 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-#import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 import minsnap_trajectories as ms  # type: ignore
 import numpy as np
 
@@ -84,7 +84,7 @@ class MinSnapController(Controller):
         #print(f"current pos {obs["pos"]}")
         #print(f"current target pos: {current_target_pos}")
         return np.concatenate((current_target_pos, np.zeros(6), yaw, np.zeros(3)), dtype=np.float32)
-    
+        
     def trigger_async_recomputation(self, obs: dict[str, NDArray[np.floating]], t: float, target_gate: int):
         """Trigger asynchronous recomputation of the trajectory.
 
@@ -172,9 +172,11 @@ class MinSnapController(Controller):
         for i, (ox, oy) in enumerate(obstacles[:, :2]):
             gx, gy = self.to_grid(ox, oy)
             if i==2 or i==3:
-                half_side = int((obstacle_size-3)/2)
+                half_side = int((obstacle_size-2)/2)
             elif i == 1:
                 half_side = int((obstacle_size+2)/2)
+            elif i == 0:
+                half_side = int((obstacle_size+4)/2)
             else:
                 half_side = int(obstacle_size / 2)  # Adjust size here
             cost_map[gx - half_side:gx + half_side + 1, gy - half_side:gy + half_side + 1] = 1e6
@@ -252,10 +254,10 @@ class MinSnapController(Controller):
         
 
         start_grid = self.to_grid(x=start_pos[0], y=start_pos[1])
-        gate1_grid = self.to_grid(x=gates_pos[0][0], y=gates_pos[0][1])
-        gate1_artifical_pos_grid = self.to_grid(x=gates_pos[0][0], y=gates_pos[0][1]-1.0)
+        gate1_grid = self.to_grid(x=gates_pos[0][0]+0.15, y=gates_pos[0][1])
+        gate1_artifical_pos_grid = self.to_grid(x=gates_pos[0][0]-0.25, y=gates_pos[0][1]-1.2)
         gate2_grid = self.to_grid(x=gates_pos[1][0]+0.1, y=gates_pos[1][1]+0.05)
-        pre_gate3_grid = self.to_grid(x=gates_pos[2][0]+0.15, y=gates_pos[2][1]-0.1)
+        pre_gate3_grid = self.to_grid(x=gates_pos[2][0], y=gates_pos[2][1]-0.15)
         gate3_grid = self.to_grid(x=gates_pos[2][0], y=gates_pos[2][1]+0.1)
         gate3_artificial__pos_grid = self.to_grid(x=gates_pos[2][0]-0.8, y=gates_pos[2][1]+0.3)
         gate4_grid = self.to_grid(x=gates_pos[3][0]+0.1, y=gates_pos[3][1]+0.1)
@@ -325,12 +327,19 @@ class MinSnapController(Controller):
                 cost_map, start_grid, gate2_grid,
                 fully_connected=True, geometric=True
             )
-            #path2_artificial_from_pos, _ = route_through_array(
-            #    cost_map, gate1_artifical_pos_grid, gate2_grid,
-            #    fully_connected=True, geometric=True
-            #)
-            #path2_from_pos_world_coords = np.concatenate([np.array([self.to_coord(gx, gy) for gx, gy in path2_from_pos]), np.array([self.to_coord(gx, gy) for gx, gy in path2_artificial_from_pos])])
-            path2_from_pos_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path2_from_pos])
+            path2_from_pos_to_artificial, _ = route_through_array(
+                cost_map, start_grid, gate1_artifical_pos_grid,
+                fully_connected=True, geometric=True
+            )
+            path2_artificial_to_gate2, _ = route_through_array(
+                cost_map, gate1_artifical_pos_grid, gate2_grid,
+                fully_connected=True, geometric=True
+            )
+            if np.linalg.norm(pos[:2] - gates[0]['pos'][:2]) < 0.3:
+                print("using artificial point")
+                path2_from_pos_world_coords = np.concatenate([np.array([self.to_coord(gx, gy) for gx, gy in path2_from_pos_to_artificial]), np.array([self.to_coord(gx, gy) for gx, gy in path2_artificial_to_gate2])])
+            else:
+                path2_from_pos_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path2_from_pos])
             n_2 = path2_from_pos_world_coords.shape[0]
             z_2 = np.linspace(start_pos[2], gates[1]["pos"][2]+0.12, n_2)
             path2_from_pos_3d = np.column_stack((path2_from_pos_world_coords, z_2))
@@ -365,7 +374,19 @@ class MinSnapController(Controller):
             n_4 = path4_world_coords.shape[0]
             z_4 = np.linspace(gates[2]["pos"][2], gates[3]["pos"][2]+0.3, n_4)
             path4_3d = np.column_stack((path4_world_coords, z_4))
-            combined_3d_path = np.concatenate([path3_from_pos_3d, path4_3d])
+            if np.linalg.norm(pos[:2] - gates[2]['pos'][:2]) < 0.5:
+                print("no pre gate 3 point!")
+                path4, _ = route_through_array(
+                    cost_map, start_grid, gate3_artificial__pos_grid,
+                    fully_connected=True, geometric=True
+                )
+                path4_world_coords = np.concatenate([np.array([self.to_coord(gx, gy) for gx, gy in path4]), np.array([self.to_coord(gx, gy) for gx, gy in path4_artificial]), np.array([self.to_coord(gx, gy) for gx, gy in path4_artificial_2])])
+                n_4 = path4_world_coords.shape[0]
+                z_4 = np.linspace(gates[2]["pos"][2], gates[3]["pos"][2]+0.3, n_4)
+                path4_3d = np.column_stack((path4_world_coords, z_4))
+                combined_3d_path = np.concatenate([path3_from_pos_3d, path4_3d])
+            else:
+                combined_3d_path = np.concatenate([path3_from_pos_3d, path4_3d])
         elif target_gate == 3:
             print("===================================")
             print("TARGET GATE 3")
@@ -397,7 +418,10 @@ class MinSnapController(Controller):
             path4_from_pos_3d = np.column_stack((path4_from_pos_world_coords, z_4))
             combined_3d_path = np.concatenate([path4_from_pos_3d])
 
-        reduced_3d_path = combined_3d_path[::25]
+        num_combined_points = combined_3d_path.shape[0]
+        reduction_rate = int(num_combined_points/20)
+        print(f"reduction_rate: {reduction_rate}")
+        reduced_3d_path = combined_3d_path[::reduction_rate]
         print(reduced_3d_path.shape)
         num_points = reduced_3d_path.shape[0]
         time_steps = np.linspace(tau, self.t_total, num_points)
@@ -450,8 +474,8 @@ class MinSnapController(Controller):
             time=t,
             position=np.array([pos[0], pos[1], pos[2]]),
             velocity=(
-            None if np.linalg.norm(pos[:2] - gates[2]["pos"][:2]) < 0.25 
-            else np.array([vel[0], vel[1], vel[2]])
+            None if np.linalg.norm(pos[:2] - gates[2]["pos"][:2]) < 0.25 or np.linalg.norm(pos[:2] - gates[1]["pos"][:2]) < 0.25
+            else np.array([vel[0]*0.5, vel[1]*0.5, vel[2]])
             ) if t == tau else None  # Constrain velocity for the first waypoint unless close to gate[2]
             )
             for t, pos in zip(time_steps, reduced_3d_path)
@@ -477,7 +501,7 @@ class MinSnapController(Controller):
         print("trajectory updated!")
         print("Execution time:", (end - start) * 1e3, "ms")
         
-        """
+        
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))  # Create two side-by-side subplots
         # First plot: Trajectory and reduced path points
         x = target_pos[:, 0]
@@ -504,6 +528,5 @@ class MinSnapController(Controller):
         plt.tight_layout()
         plt.savefig("trajectory_and_cost_map_changed.png")
         plt.close()
-        """
         
         return target_pos, target_vel, target_acc
