@@ -32,7 +32,7 @@ class MinSnapController(Controller):
 
         self.t_total = 16.0  # total time duration
         self.time = 0 # time passed since start
-        self.plot = True
+        self.plot = False
 
         self.min_x, self.max_x = -2.0, 2.0
         self.min_y, self.max_y = -2.0, 2.0
@@ -249,7 +249,7 @@ class MinSnapController(Controller):
         if self.target_positions is None or self.target_positions.size == 0:
             start_pos = pos
         else:
-            start_pos = self.target_positions[self._tick+4]
+            start_pos = self.target_positions[self._tick+3]
 
         start_grid = self.to_grid(x=start_pos[0], y=start_pos[1])
 
@@ -502,7 +502,7 @@ class MinSnapController(Controller):
             ])
 
         #combined_3d_path = self.calculate_drone_path(pos, start_pos, gates_pos, gates, target_gate, cost_map)
-        reduced_3d_path = combined_3d_path[::25]
+        reduced_3d_path = combined_3d_path[::15]
         num_points = reduced_3d_path.shape[0]
         time_steps = np.linspace(tau, self.t_total, num_points)
         
