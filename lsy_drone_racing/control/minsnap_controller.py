@@ -4,7 +4,7 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import minsnap_trajectories as ms  # type: ignore
 import numpy as np
 from scipy.interpolate import CubicSpline
@@ -579,7 +579,7 @@ class MinSnapController(Controller):
         print("trajectory updated!")
         print("Execution time:", (end - start) * 1e3, "ms")
         
-        
+        """
         if self.plot:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))  # Create two side-by-side subplots
             # First plot: Trajectory and reduced path points
@@ -622,5 +622,6 @@ class MinSnapController(Controller):
             plt.tight_layout()
             plt.savefig("trajectory_and_cost_map_changed.png")
             plt.close()
+        """
 
         return self.target_positions, self.target_velocities, self.target_accelerations
