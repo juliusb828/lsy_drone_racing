@@ -1,61 +1,272 @@
-from __future__ import annotations  # Python 3.10 type hints  # noqa: D100
+"""This module implements an example MPC using attitude control for a quadrotor.
+
+It utilizes the collective thrust interface for drone control to compute control commands based on
+current state observations and desired waypoints.
+
+The waypoints are generated using cubic spline interpolation from a set of predefined waypoints.
+Note that the trajectory uses pre-defined waypoints instead of dynamically generating a good path.
+"""
+
+from __future__ import annotations  # Python 3.10 type hints
 
 import threading
 import time
 from typing import TYPE_CHECKING
 
-#import matplotlib.pyplot as plt
-import minsnap_trajectories as ms  # type: ignore
 import numpy as np
+import scipy
+from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
+from casadi import MX, cos, sin, vertcat
 from scipy.interpolate import CubicSpline
-
-#from scipy.interpolate import BSpline, make_interp_spline
 from scipy.spatial.transform import Rotation as R
 from skimage.graph import route_through_array  #type: ignore
 
-#from scipy.spatial.transform import Rotation as R
 from lsy_drone_racing.control import Controller
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
-class MinSnapController(Controller):
-    """A controller that uses the minsnap python package to generate a trajectory and follow it."""
+def export_quadrotor_ode_model() -> AcadosModel:
+    """Symbolic Quadrotor Model."""
+    # Define name of solver to be used in script
+    model_name = "lsy_example_mpc"
+
+    # Define Gravitational Acceleration
+    GRAVITY = 9.806
+
+    # Sys ID Params
+    params_pitch_rate = [-6.003842038081178, 6.213752925707588]
+    params_roll_rate = [-3.960889336015948, 4.078293254657104]
+    params_yaw_rate = [-0.005347588299390372, 0.0]
+    params_acc = [20.907574256269616, 3.653687545690674]
+
+    """Model setting"""
+    # define basic variables in state and input vector
+    px = MX.sym("px")  # 0
+    py = MX.sym("py")  # 1
+    pz = MX.sym("pz")  # 2
+    vx = MX.sym("vx")  # 3
+    vy = MX.sym("vy")  # 4
+    vz = MX.sym("vz")  # 5
+    roll = MX.sym("r")  # 6
+    pitch = MX.sym("p")  # 7
+    yaw = MX.sym("y")  # 8
+    f_collective = MX.sym("f_collective")
+
+    f_collective_cmd = MX.sym("f_collective_cmd")
+    r_cmd = MX.sym("r_cmd")
+    p_cmd = MX.sym("p_cmd")
+    y_cmd = MX.sym("y_cmd")
+
+    df_cmd = MX.sym("df_cmd")
+    dr_cmd = MX.sym("dr_cmd")
+    dp_cmd = MX.sym("dp_cmd")
+    dy_cmd = MX.sym("dy_cmd")
+
+    # define state and input vector
+    states = vertcat(
+        px,
+        py,
+        pz,
+        vx,
+        vy,
+        vz,
+        roll,
+        pitch,
+        yaw,
+        f_collective,
+        f_collective_cmd,
+        r_cmd,
+        p_cmd,
+        y_cmd,
+    )
+    inputs = vertcat(df_cmd, dr_cmd, dp_cmd, dy_cmd)
+
+    # Define nonlinear system dynamics
+    f = vertcat(
+        vx,
+        vy,
+        vz,
+        (params_acc[0] * f_collective + params_acc[1])
+        * (cos(roll) * sin(pitch) * cos(yaw) + sin(roll) * sin(yaw)),
+        (params_acc[0] * f_collective + params_acc[1])
+        * (cos(roll) * sin(pitch) * sin(yaw) - sin(roll) * cos(yaw)),
+        (params_acc[0] * f_collective + params_acc[1]) * cos(roll) * cos(pitch) - GRAVITY,
+        params_roll_rate[0] * roll + params_roll_rate[1] * r_cmd,
+        params_pitch_rate[0] * pitch + params_pitch_rate[1] * p_cmd,
+        params_yaw_rate[0] * yaw + params_yaw_rate[1] * y_cmd,
+        10.0 * (f_collective_cmd - f_collective),
+        df_cmd,
+        dr_cmd,
+        dp_cmd,
+        dy_cmd,
+    )
+
+    # Initialize the nonlinear model for NMPC formulation
+    model = AcadosModel()
+    model.name = model_name
+    model.f_expl_expr = f
+    model.f_impl_expr = None
+    model.x = states
+    model.u = inputs
+
+    return model
+
+
+def create_ocp_solver(
+    Tf: float, N: int, verbose: bool = False
+) -> tuple[AcadosOcpSolver, AcadosOcp]:
+    """Creates an acados Optimal Control Problem and Solver."""
+    ocp = AcadosOcp()
+
+    # set model
+    model = export_quadrotor_ode_model()
+    ocp.model = model
+
+    # Get Dimensions
+    nx = model.x.rows()
+    nu = model.u.rows()
+    ny = nx + nu
+    ny_e = nx
+
+    # Set dimensions
+    ocp.solver_options.N_horizon = N
+
+    ## Set Cost
+    # For more Information regarding Cost Function Definition in Acados: https://github.com/acados/acados/blob/main/docs/problem_formulation/problem_formulation_ocp_mex.pdf
+
+    # Cost Type
+    ocp.cost.cost_type = "LINEAR_LS"
+    ocp.cost.cost_type_e = "LINEAR_LS"
+
+    # Weights
+    Q = np.diag(
+        [
+            10.0,
+            10.0,
+            10.0,  # Position
+            0.01,
+            0.01,
+            0.01,  # Velocity
+            0.1,
+            0.1,
+            0.1,  # rpy
+            0.01,
+            0.01,  # f_collective, f_collective_cmd
+            0.01,
+            0.01,
+            0.01,
+        ]
+    )  # rpy_cmd
+
+    R = np.diag([0.01, 0.01, 0.01, 0.01])
+
+    Q_e = Q.copy()
+
+    ocp.cost.W = scipy.linalg.block_diag(Q, R)
+    ocp.cost.W_e = Q_e
+
+    Vx = np.zeros((ny, nx))
+    Vx[:nx, :] = np.eye(nx)  # Only select position states
+    ocp.cost.Vx = Vx
+
+    Vu = np.zeros((ny, nu))
+    Vu[nx : nx + nu, :] = np.eye(nu)  # Select all actions
+    ocp.cost.Vu = Vu
+
+    Vx_e = np.zeros((ny_e, nx))
+    Vx_e[:nx, :nx] = np.eye(nx)  # Only select position states
+    ocp.cost.Vx_e = Vx_e
+
+    # Set initial references (we will overwrite these later on to make the controller track the traj.)
+    # ocp.cost.yref = np.zeros((ny, ))
+    # ocp.cost.yref_e = np.zeros((ny_e, ))
+    ocp.cost.yref = np.array(
+        [1.0, 1.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.35, 0.35, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+
+    ocp.cost.yref_e = np.array(
+        [1.0, 1.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.35, 0.35, 0.0, 0.0, 0.0]
+    )
+
+    # Set State Constraints
+    ocp.constraints.lbx = np.array([0.1, 0.1, -1.57, -1.57, -1.57])
+    ocp.constraints.ubx = np.array([0.55, 0.55, 1.57, 1.57, 1.57])
+    ocp.constraints.idxbx = np.array([9, 10, 11, 12, 13])
+
+    # Set Input Constraints
+    # ocp.constraints.lbu = np.array([-10.0, -10.0, -10.0. -10.0])
+    # ocp.constraints.ubu = np.array([10.0, 10.0, 10.0, 10.0])
+    # ocp.constraints.idxbu = np.array([0, 1, 2, 3])
+
+    # We have to set x0 even though we will overwrite it later on.
+    ocp.constraints.x0 = np.zeros((nx))
+
+    # Solver Options
+    ocp.solver_options.qp_solver = "FULL_CONDENSING_HPIPM"  # FULL_CONDENSING_QPOASES
+    ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
+    ocp.solver_options.integrator_type = "ERK"
+    ocp.solver_options.nlp_solver_type = "SQP"  # SQP_RTI
+    ocp.solver_options.tol = 1e-5
+
+    ocp.solver_options.qp_solver_cond_N = N
+    ocp.solver_options.qp_solver_warm_start = 1
+
+    ocp.solver_options.qp_solver_iter_max = 20
+    ocp.solver_options.nlp_solver_max_iter = 50
+
+    # set prediction horizon
+    ocp.solver_options.tf = Tf
+
+    acados_ocp_solver = AcadosOcpSolver(ocp, json_file="lsy_example_mpc.json", verbose=verbose)
+
+    return acados_ocp_solver, ocp
+
+
+class MPController(Controller):
+    """Example of a MPC using the collective thrust and attitude interface."""
+
     def __init__(self, obs: dict[str, NDArray[np.floating]], info: dict, config: dict):
-        """Initializes the controller by generating a base trajectory."""
+        """Initialize the attitude controller.
+
+        Args:
+            obs: The initial observation of the environment's state. See the environment's
+                observation space for details.
+            info: Additional environment information from the reset.
+            config: The configuration of the environment.
+        """
         super().__init__(obs, info, config)
+        self.freq = config.env.freq
+        # frequency is 50 Hz, so 0.02 ms timesteps
+        self._tick = 0
+
+        self.des_completion_time = 12
+        self.N = 60
+        self.T_HORIZON = 3.0
+        self.dt = self.T_HORIZON / self.N
 
         self.last_known_gates_pos = obs["gates_pos"]
         self.last_known_obstacles_pos = obs["obstacles_pos"]
         self.trajectory_history = []
         self.gates_passed = [False, False, False, False]
 
-        self.t_total = 16.0  # total time duration
         self.time = 0 # time passed since start
         self.plot = False
 
         self.min_x, self.max_x = -2.0, 2.0
         self.min_y, self.max_y = -2.0, 2.0
         self.resolution = 0.02
-        self.target_positions = None
-        self.target_velocities = None
-        
-        self.prev_pos_error = None
-        self._tick = 0
-        # frequency is 50 Hz, so 0.02 ms timesteps
-        self._freq = config.env.freq
+
         self._finished = False
         self.recompute_flag = False
 
-        self.errors = []
-        self.step_count = 0
-
         #setup once, don't recalculate this every time
-
         gates_pos = obs["gates_pos"]
         gates_quat = obs["gates_quat"]
-        gates  = self.create_gates_dict(gates_pos, gates_quat)
+        print(f"gates_pos {gates_pos}")
+        gates = self.create_gates_dict(gates_pos, gates_quat)
+        print(gates)
         cost_map = self.construct_cost_map(obs["obstacles_pos"], gates)
         pre_gate_grids = []
         pos_gate_grids = []
@@ -174,13 +385,20 @@ class MinSnapController(Controller):
         self.path_pre_gate4_to_past_gate4_3d = np.column_stack((path_pre_gate4_to_past_gate4_world_coords, z4))
 
         # compute trajectory last, doesn't work if paths aren't calculated 
-        self.target_positions, self.target_velocities, self.target_accelerations = self.compute_trajectory(obs["pos"], obs["gates_pos"], obs["gates_quat"], obs["obstacles_pos"], 0.0, obs["target_gate"], obs["vel"], False, False)
+        self.waypoints = self.compute_waypoints(obs["pos"], obs["gates_pos"], obs["gates_quat"], obs["obstacles_pos"], 0.0, obs["target_gate"], obs["vel"], False, False)
 
+        self.acados_ocp_solver, self.ocp = create_ocp_solver(self.T_HORIZON, self.N)
+
+        self.last_f_collective = 0.3
+        self.last_rpy_cmd = np.zeros(3)
+        self.last_f_cmd = 0.3
+        self.config = config
+        self.finished = False
 
     def compute_control(
         self, obs: dict[str, NDArray[np.floating]], info: dict | None = None
     ) -> NDArray[np.floating]:
-        """Compute the next desired state of the drone, updates the trajectory if position of gates or obstacles changes.
+        """Compute the next desired collective thrust and roll/pitch/yaw of the drone.
 
         Args:
             obs: The current observation of the environment. See the environment's observation space
@@ -188,8 +406,7 @@ class MinSnapController(Controller):
             info: Optional additional information as a dictionary.
 
         Returns:
-            The drone state [x, y, z, vx, vy, vz, ax, ay, az, yaw, rrate, prate, yrate] as a numpy
-                array.
+            The collective thrust and orientation [t_des, r_des, p_des, y_des] as a numpy array.
         """
         target_gate = obs["target_gate"]
         self.gates_passed = np.zeros(4, dtype=bool) 
@@ -200,37 +417,94 @@ class MinSnapController(Controller):
             max_distance = np.max(distances)
             self.last_known_obstacles_pos = obs["obstacles_pos"]
             if max_distance > 0.08:
-                #print("recomputing trajectory")
+                print("recomputing waypoints")
                 self.trigger_async_recomputation(obs, self.time, target_gate, True, False)
-            #else:
-                #print("no recomputation necessary")
 
         if not np.allclose(obs["gates_pos"], self.last_known_gates_pos, atol=0.001):
             distances = np.linalg.norm(obs["gates_pos"] - self.last_known_gates_pos, axis=-1)
             max_distance = np.max(distances)
             self.last_known_gates_pos = obs["gates_pos"]
             if max_distance > 0.08:
-                #print("recomputing trajectory")
+                print("recomputing waypoints")
                 self.trigger_async_recomputation(obs, self.time, target_gate, False, True)
-            #else:
-                #print("no recomputation necessary")
+
         
-        #print(tau)
-        current_target_pos = self.target_positions[self._tick]
-        current_target_vel = self.target_velocities[self._tick]
-        #current_target_acc = self.target_accelerations[self._tick]
-        yaw = np.array([np.arctan2(current_target_vel[1], current_target_vel[0])])
+        i = min(self._tick, len(self.x_des) - 1)
+        if self._tick > i:
+            self.finished = True
 
-        if self.time == self.t_total:  # Maximum duration reached
-            self._finished = True
+        q = obs["quat"]
+        r = R.from_quat(q)
+        # Convert to Euler angles in XYZ order
+        rpy = r.as_euler("xyz", degrees=False)  # Set degrees=False for radians
 
-        error_3d = np.linalg.norm(current_target_pos - obs["pos"])
-        self.errors.append(error_3d)
-        self.step_count += 1
-        #print(f"average error {sum(self.errors)/self.step_count}")
+        xcurrent = np.concatenate(
+            (
+                obs["pos"],
+                obs["vel"],
+                rpy,
+                np.array([self.last_f_collective, self.last_f_cmd]),
+                self.last_rpy_cmd,
+            )
+        )
+        self.acados_ocp_solver.set(0, "lbx", xcurrent)
+        self.acados_ocp_solver.set(0, "ubx", xcurrent)
 
-        return np.concatenate((current_target_pos, current_target_vel, np.zeros(3), yaw, np.zeros(3)), dtype=np.float32)
-        
+        for j in range(self.N):
+            yref = np.array(
+                [
+                    self.x_des[i + j],
+                    self.y_des[i + j],
+                    self.z_des[i + j],
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.35,
+                    0.35,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ]
+            )
+            self.acados_ocp_solver.set(j, "yref", yref)
+        yref_N = np.array(
+            [
+                self.x_des[i + self.N],
+                self.y_des[i + self.N],
+                self.z_des[i + self.N],
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.35,
+                0.35,
+                0.0,
+                0.0,
+                0.0,
+            ]
+        )
+        self.acados_ocp_solver.set(self.N, "yref", yref_N)
+
+        self.acados_ocp_solver.solve()
+        x1 = self.acados_ocp_solver.get(1, "x")
+        w = 1 / self.config.env.freq / self.dt
+        self.last_f_collective = self.last_f_collective * (1 - w) + x1[9] * w
+        self.last_f_cmd = x1[10]
+        self.last_rpy_cmd = x1[11:14]
+
+        cmd = x1[10:14]
+
+        return cmd
+
     def trigger_async_recomputation(self, obs: dict[str, NDArray[np.floating]], t: float, target_gate: int, obsDetected: bool, gateDetected: bool):
         """Trigger asynchronous recomputation of the trajectory.
 
@@ -244,10 +518,11 @@ class MinSnapController(Controller):
         """
         # Start computation in background thread
         self.trajectory_computation_thread = threading.Thread(
-            target=self.compute_trajectory, 
+            target=self.compute_waypoints, 
             args=(obs["pos"], obs["gates_pos"], obs["gates_quat"], obs["obstacles_pos"], self.time, target_gate, obs["vel"], obsDetected, gateDetected)
         )
         self.trajectory_computation_thread.start()
+
 
     def step_callback(
         self,
@@ -258,15 +533,13 @@ class MinSnapController(Controller):
         truncated: bool,
         info: dict,
     ) -> bool:
-        """Increment the time step counter.
-
-        Returns:
-            True if the controller is finished, False otherwise.
-        """
+        """Increment the tick counter."""
         self._tick += 1
-        self.time += 0.02
-        return self._finished
-        """Reset the time step counter."""
+
+        return self.finished
+
+    def episode_callback(self):
+        """Reset the integral error."""
         self._tick = 0
 
     def to_grid(self, x: float, y: float) -> tuple[int, int]:
@@ -311,13 +584,13 @@ class MinSnapController(Controller):
         width = int(np.ceil((self.max_x - self.min_x) / self.resolution))
         height = int(np.ceil((self.max_y - self.min_y) / self.resolution))
         cost_map = np.ones((height, width))
-        obstacle_size = 20
+        obstacle_size = 22
         gate_sides_height = 6
         
         # Mark obstacles on the cost map
         for i, (ox, oy) in enumerate(obstacles[:, :2]):
             gx, gy = self.to_grid(ox, oy)
-            half_side = int(obstacle_size / 2)  # Adjust size here
+            half_side = int(obstacle_size / 2)
             cost_map[gx - half_side:gx + half_side + 1, gy - half_side:gy + half_side + 1] = 1e6
 
         # Mark sides of gates on the cost map
@@ -337,7 +610,7 @@ class MinSnapController(Controller):
 
         cost_map = cost_map.astype(np.int32)
         return cost_map
-
+    
     def create_gates_dict(self, gates_pos: NDArray[np.floating], gates_quat: NDArray[np.floating]) -> list[dict[str, list[float]]]:
         """Create a dictionary representation of gates with positions and orientations.
 
@@ -355,7 +628,7 @@ class MinSnapController(Controller):
             gates.append({'pos': pos.tolist(), 'rpy': rpy.tolist()})
         return gates
 
-    def compute_trajectory(
+    def compute_waypoints(
         self,
         pos: NDArray[np.floating],
         gates_pos: NDArray[np.floating],
@@ -366,8 +639,8 @@ class MinSnapController(Controller):
         vel: NDArray[np.floating],
         obsDetected: bool,
         gateDetected: bool
-    ) -> tuple[ms.PolynomialTrajectory, list[ms.Waypoint]]:
-        """Recompute the trajectory based on the current position, gates, and obstacles.
+    ) -> list:
+        """Compute a list of waypoints based on the current position, gates, and obstacles.
 
         Args:
             pos: Current position of the drone as a numpy array.
@@ -376,19 +649,16 @@ class MinSnapController(Controller):
             obstacles_pos: Positions of the obstacles as a numpy array.
             tau: Current time in the trajectory, used as starting time.
             target_gate: Index of the target gate.
-            vel: the current velocity
+            vel: The current velocity.
 
         Returns:
-            A tuple containing the polynomial trajectory and the list of waypoints.
+            A list of waypoints.
         """
         start = time.time()
         gates  = self.create_gates_dict(gates_pos, gates_quat)
         cost_map = self.construct_cost_map(obstacles_pos, gates)
 
-        if self.target_positions is None or self.target_positions.size == 0:
-            start_pos = pos
-        else:
-            start_pos = self.target_positions[self._tick]
+        start_pos = pos
 
         start_grid = self.to_grid(x=start_pos[0], y=start_pos[1])
         
@@ -536,92 +806,32 @@ class MinSnapController(Controller):
                 path_start_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
             ])
         
-        reduced_3d_path = combined_3d_path[::25]
-        num_points = reduced_3d_path.shape[0]
-        time_steps = np.linspace(tau, self.t_total, num_points)
-        
-        if self.target_velocities is not None:
-            target_velocity_at_tau = self.target_velocities[self._tick]
-        else:
-            target_velocity_at_tau = np.array([vel[0], vel[1], vel[2]])
-        waypoints = []
-        for t, pos in zip(time_steps, reduced_3d_path):
-            location = np.array([pos[0], pos[1], pos[2]])
-            if t == tau:
-                velocity = np.array([target_velocity_at_tau[0], target_velocity_at_tau[1], target_velocity_at_tau[2]])
-            else:
-                velocity = None
-            waypoint = ms.Waypoint(
-            time=t,
-            position=location,
-            velocity=velocity
-            )
-            waypoints.append(waypoint)
+        reduced_3d_path = combined_3d_path[::20]
+        #num_points = reduced_3d_path.shape[0]
+        self.waypoints = reduced_3d_path
 
+        ts = np.linspace(0, 1, np.shape(self.waypoints)[0])
+        cs_x = CubicSpline(ts, self.waypoints[:, 0])
+        cs_y = CubicSpline(ts, self.waypoints[:, 1])
+        cs_z = CubicSpline(ts, self.waypoints[:, 2])
 
-        polys = ms.generate_trajectory(
-            waypoints,
-            degree=8,  # Polynomial degree
-            idx_minimized_orders=(3, 4),
-            num_continuous_orders=3,
-            algorithm="closed-form",
-        )
+        # Generate trajectory at controller frequency
+        ts = np.linspace(0, 1, int(self.freq * self.des_completion_time))
+        self.x_des = cs_x(ts)
+        self.y_des = cs_y(ts)
+        self.z_des = cs_z(ts)
 
-        sampling_rate = 50  # Adjust sampling rate as needed
-        time_samples = np.linspace(tau, self.t_total, int((self.t_total-tau) * sampling_rate))
-        pva = ms.compute_trajectory_derivatives(polys, time_samples, 3)
-        target_pos = pva[0, ...]
-        target_vel = pva[1, ...]
-        target_acc = pva[2, ...]
-        self.target_positions, self.target_velocities, self.target_accelerations = target_pos, target_vel, target_acc
+        # Extend trajectory for MPC horizon
+        self.x_des = np.concatenate((self.x_des, [self.x_des[-1]] * (2 * self.N + 1)))
+        self.y_des = np.concatenate((self.y_des, [self.y_des[-1]] * (2 * self.N + 1)))
+        self.z_des = np.concatenate((self.z_des, [self.z_des[-1]] * (2 * self.N + 1)))
+
+        # Reset trajectory tracking
         self._tick = 0
+        self.finished = False
+
+
         end = time.time()
         print("trajectory updated!")
         print("Execution time:", (end - start) * 1e3, "ms")
-        
-        """
-        if self.plot:
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))  # Create two side-by-side subplots
-            # First plot: Trajectory and reduced path points
-            x = target_pos[:, 0]
-            y = target_pos[:, 1]
-            reduced_x = reduced_3d_path[:, 0]
-            reduced_y = reduced_3d_path[:, 1]
-            ax1.plot(x, y, label='Trajectory', color='blue', linewidth=2)
-            ax1.scatter(reduced_x, reduced_y, label='Reduced Path Points', color='red', s=20)
-            ax1.set_xlabel('X')
-            ax1.set_ylabel('Y')
-            ax1.legend()
-            ax1.grid()
-            ax1.set_title('Trajectory Plot')
-
-            # Second plot: Cost map and path
-            ax2.imshow(cost_map.T, cmap='gray_r', origin='lower')  # Transpose cost_map for correct orientation
-            path = np.array(reduced_3d_path[:, :2])  # Ensure path is a numpy array
-            grid_coords = np.array([self.to_grid(x, y) for x, y in path])
-            rows, cols = grid_coords[:, 0], grid_coords[:, 1]
-            ax2.plot(rows, cols, color='red', linewidth=2)
-            ax2.set_title('Cost Map with Path')
-
-            # Plot additional points on the cost map
-            points_to_plot = [
-                self.pre_gate_1_grid, self.pre_gate_2_grid, self.pre_gate_3_grid, self.pre_gate_4_grid,
-                self.past_gate_1_grid, self.past_gate_2_grid, self.past_gate_3_grid, self.past_gate_4_grid,
-                self.artifical_pos_1_grid, self.artificial_pos_2_grid
-            ]
-            point_labels = [
-                "Pre Gate 1", "Pre Gate 2", "Pre Gate 3", "Pre Gate 4",
-                "Past Gate 1", "Past Gate 2", "Past Gate 3", "Past Gate 4",
-                "Artificial Pos 1", "Artificial Pos 2"
-            ]
-            for (gx, gy), label in zip(points_to_plot, point_labels):
-                ax2.scatter(gx, gy, label=label, s=50)  # Plot each point
-            ax2.legend()
-
-            # Save and show the combined plot
-            plt.tight_layout()
-            plt.savefig("trajectory_and_cost_map_changed.png")
-            plt.close()
-        """
-
-        return self.target_positions, self.target_velocities, self.target_accelerations
+        return reduced_3d_path
