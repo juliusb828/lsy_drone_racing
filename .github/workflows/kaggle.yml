@@ -27,6 +27,30 @@ jobs:
           init-shell: bash
           create-args: python=3.12
           cache-environment: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+      - name: Install acados from source
+        run: |
+          cd $HOME
+          git clone https://github.com/acados/acados.git
+          cd acados
+          git checkout tags/v0.5.0
+          git submodule update --recursive --init
+          
+          mkdir -p build
+          cd build
+          cmake -DACADOS_WITH_QPOASES=ON ..
+          make install -j4
+          
+          # Install Python interface
+          cd $HOME/acados
+          pip install -e interfaces/acados_template
+      - name: Set environment variables
+        run: |
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/acados/lib" >> $GITHUB_ENV
+          echo "ACADOS_SOURCE_DIR=$HOME/acados" >> $GITHUB_ENV
       - run: pip install .[online_submission,test]
         shell: micromamba-shell {0}
       - name: Run simulation tests
