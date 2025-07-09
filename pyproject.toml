@@ -32,7 +32,7 @@ dependencies = [
     "gymnasium[array-api]",
     "minsnap-trajectories",
     "scikit-image",
-    acados_template = "2.3.1",
+    "acados_template = 2.3.1",
     "casadi",
 ]
 
