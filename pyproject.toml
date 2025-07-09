@@ -33,6 +33,9 @@ dependencies = [
     "minsnap-trajectories",
     "scikit-image",
     "casadi",
+    "matplotlib",
+    "pyparsing",
+    "cython",
 ]
 
 [project.optional-dependencies]
