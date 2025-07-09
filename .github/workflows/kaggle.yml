@@ -44,9 +44,16 @@ jobs:
           cmake -DACADOS_WITH_QPOASES=ON ..
           make install -j4
           
-          # Install Python interface
+          # Install acados_template
           cd $HOME/acados
-          pip install -e interfaces/acados_template
+          pip install -e interfaces/acados_template 
+      - name: Download and install Tera renderer
+        run: |
+          cd $HOME/acados
+          wget https://github.com/acados/tera_renderer/releases/latest/download/t_renderer-v0.0.34-linux
+          chmod +x t_renderer-v0.0.34-linux
+          mkdir -p bin
+          mv t_renderer-v0.0.34-linux bin/t_renderer- name: Install acados from source
       - name: Set environment variables
         run: |
           echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/acados/lib" >> $GITHUB_ENV
