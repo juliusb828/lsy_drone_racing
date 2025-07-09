@@ -32,6 +32,8 @@ dependencies = [
     "gymnasium[array-api]",
     "minsnap-trajectories",
     "scikit-image",
+    "acados_template",
+    "casadi",
 ]
 
 [project.optional-dependencies]

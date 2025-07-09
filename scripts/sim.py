@@ -15,9 +15,11 @@ from typing import TYPE_CHECKING
 
 import fire
 import gymnasium
+import numpy as np
 from gymnasium.wrappers.jax_to_numpy import JaxToNumpy
 
-from lsy_drone_racing.utils import load_config, load_controller
+from lsy_drone_racing.utils import load_config, load_controller, draw_line
+
 
 if TYPE_CHECKING:
     from ml_collections import ConfigDict
@@ -93,6 +95,17 @@ def simulate(
             # Synchronize the GUI.
             if config.sim.gui:
                 if ((i * fps) % config.env.freq) < fps:
+                    if hasattr(controller, "get_trajectory_and_mpc_horizon"):
+                        full_traj, mpc_horizon = controller.get_trajectory_and_mpc_horizon()
+                        draw_line(env, full_traj, rgba=[0, 1, 0, 1])       # Green = full trajectory
+                        try:
+                            draw_line(env, mpc_horizon, rgba=[0, 0, 1, 1])  # Blue = MPC horizon
+                        except np.linalg.LinAlgError:
+                            # Skip drawing the line if SVD doesn't converge
+                            pass
+                        except Exception as e:
+                            # Optionally log other potential drawing errors
+                            print(f"Warning: Could not draw MPC horizon line: {e}")
                     env.render()
             i += 1
 

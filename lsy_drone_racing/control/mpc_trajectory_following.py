@@ -190,10 +190,17 @@ def create_ocp_solver(
         [1.0, 1.0, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.35, 0.35, 0.0, 0.0, 0.0]
     )
 
+
     # Set State Constraints
     ocp.constraints.lbx = np.array([0.1, 0.1, -1.57, -1.57, -1.57])
     ocp.constraints.ubx = np.array([0.55, 0.55, 1.57, 1.57, 1.57])
     ocp.constraints.idxbx = np.array([9, 10, 11, 12, 13])
+    """
+    # Set State Constraints with velocity constraints
+    ocp.constraints.lbx = np.array([-2.0, -2.0, -2.0, 0.1, 0.1, -1.57, -1.57, -1.57])
+    ocp.constraints.ubx = np.array([2.0, 2.0, 2.0, 0.55, 0.55, 1.57, 1.57, 1.57])
+    ocp.constraints.idxbx = np.array([3, 4, 5, 9, 10, 11, 12, 13])
+    """    
 
     # Set Input Constraints
     # ocp.constraints.lbu = np.array([-10.0, -10.0, -10.0. -10.0])
@@ -241,10 +248,15 @@ class MPController(Controller):
         # frequency is 50 Hz, so 0.02 ms timesteps
         self._tick = 0
 
-        self.des_completion_time = 12
-        self.N = 60
-        self.T_HORIZON = 3.0
+        self.des_completion_time = 8
+        self.slowdown_factor = 1.5
+        self.N = 20
+        self.T_HORIZON = 1.0
         self.dt = self.T_HORIZON / self.N
+        self.transition_length = 10
+        self.prev_x_des = None
+        self.prev_y_des = None
+        self.prev_z_des = None
 
         self.last_known_gates_pos = obs["gates_pos"]
         self.last_known_obstacles_pos = obs["obstacles_pos"]
@@ -264,9 +276,7 @@ class MPController(Controller):
         #setup once, don't recalculate this every time
         gates_pos = obs["gates_pos"]
         gates_quat = obs["gates_quat"]
-        print(f"gates_pos {gates_pos}")
         gates = self.create_gates_dict(gates_pos, gates_quat)
-        print(gates)
         cost_map = self.construct_cost_map(obs["obstacles_pos"], gates)
         pre_gate_grids = []
         pos_gate_grids = []
@@ -280,9 +290,9 @@ class MPController(Controller):
             
         self.pre_gate_1_grid, self.pre_gate_2_grid, self.pre_gate_3_grid, self.pre_gate_4_grid = pre_gate_grids
         self.past_gate_1_grid, self.past_gate_2_grid, self.past_gate_3_grid, self.past_gate_4_grid = pos_gate_grids
-        self.artifical_pos_1_grid = self.to_grid(x=gates_pos[0][0]-0.35, y=gates_pos[0][1]-0.95)
-        self.artificial_pos_2_grid = self.to_grid(x=gates_pos[2][0]-0.8, y=gates_pos[2][1]+0.3)
-        self.past_gate_4_grid = self.to_grid(x=gates_pos[3][0]+0.15, y=gates_pos[3][1]-0.7)
+        self.artifical_pos_1_grid = self.to_grid(x=gates_pos[0][0]-0.25, y=gates_pos[0][1]-0.95)
+        self.artificial_pos_2_grid = self.to_grid(x=gates_pos[2][0]-0.5, y=gates_pos[2][1]+0.15)
+        self.past_gate_4_grid = self.to_grid(x=gates_pos[3][0], y=gates_pos[3][1]-0.7)
 
         start_grid = self.to_grid(x=obs["pos"][0], y=obs["pos"][1])
         
@@ -408,6 +418,7 @@ class MPController(Controller):
         Returns:
             The collective thrust and orientation [t_des, r_des, p_des, y_des] as a numpy array.
         """
+        #print(f"dist to 1st obstacle: {np.sqrt((obs['obstacles_pos'][0][0]-obs['pos'][0])**2 + (obs['obstacles_pos'][0][1]-obs['pos'][1])**2)}")
         target_gate = obs["target_gate"]
         self.gates_passed = np.zeros(4, dtype=bool) 
         self.gates_passed[:target_gate] = True
@@ -416,7 +427,7 @@ class MPController(Controller):
             distances = np.linalg.norm(obs["obstacles_pos"] - self.last_known_obstacles_pos, axis=-1)
             max_distance = np.max(distances)
             self.last_known_obstacles_pos = obs["obstacles_pos"]
-            if max_distance > 0.08:
+            if max_distance > 0.02:
                 print("recomputing waypoints")
                 self.trigger_async_recomputation(obs, self.time, target_gate, True, False)
 
@@ -424,7 +435,7 @@ class MPController(Controller):
             distances = np.linalg.norm(obs["gates_pos"] - self.last_known_gates_pos, axis=-1)
             max_distance = np.max(distances)
             self.last_known_gates_pos = obs["gates_pos"]
-            if max_distance > 0.08:
+            if max_distance > 0.02:
                 print("recomputing waypoints")
                 self.trigger_async_recomputation(obs, self.time, target_gate, False, True)
 
@@ -466,7 +477,7 @@ class MPController(Controller):
                     0.35,
                     0.0,
                     0.0,
-                    0.0,
+                    0.0,    
                     0.0,
                     0.0,
                     0.0,
@@ -495,6 +506,14 @@ class MPController(Controller):
         self.acados_ocp_solver.set(self.N, "yref", yref_N)
 
         self.acados_ocp_solver.solve()
+
+        # Extract the MPC trajectory from the solver and save it
+        mpc_states = []
+        for j in range(self.N + 1):
+            x = self.acados_ocp_solver.get(j, "x")
+            mpc_states.append(x[:3])  # Extract position (x, y, z) from state
+        self.mpc_horizon = np.array(mpc_states)  # Save the extracted MPC trajectory as mpc_horizon
+
         x1 = self.acados_ocp_solver.get(1, "x")
         w = 1 / self.config.env.freq / self.dt
         self.last_f_collective = self.last_f_collective * (1 - w) + x1[9] * w
@@ -535,7 +554,7 @@ class MPController(Controller):
     ) -> bool:
         """Increment the tick counter."""
         self._tick += 1
-
+        self.time += 1/self.freq
         return self.finished
 
     def episode_callback(self):
@@ -658,8 +677,22 @@ class MPController(Controller):
         gates  = self.create_gates_dict(gates_pos, gates_quat)
         cost_map = self.construct_cost_map(obstacles_pos, gates)
 
+        pre_gate_grids = []
+        pos_gate_grids = []
+        for i, (gate_pos, gate_quat) in enumerate(zip(gates_pos, gates_quat)):
+            rot = R.from_quat(gate_quat).as_matrix()
+            fwd = rot[:, 1]
+            pre_gate_grid = self.to_grid(x=gate_pos[0] - 0.2 * fwd[0], y=gate_pos[1] - 0.2 * fwd[1])
+            pos_gate_grid = self.to_grid(x=gate_pos[0] + 0.2 * fwd[0], y=gate_pos[1] + 0.2 * fwd[1])
+            pre_gate_grids.append(pre_gate_grid)
+            pos_gate_grids.append(pos_gate_grid)
+            
+        self.pre_gate_1_grid, self.pre_gate_2_grid, self.pre_gate_3_grid, self.pre_gate_4_grid = pre_gate_grids
+        self.past_gate_1_grid, self.past_gate_2_grid, self.past_gate_3_grid, self.past_gate_4_grid = pos_gate_grids
+        self.artifical_pos_1_grid = self.to_grid(x=gates_pos[0][0]-0.25, y=gates_pos[0][1]-0.95)
+        self.artificial_pos_2_grid = self.to_grid(x=gates_pos[2][0]-0.5, y=gates_pos[2][1]+0.15)
+        self.past_gate_4_grid = self.to_grid(x=gates_pos[3][0], y=gates_pos[3][1]-0.7)
         start_pos = pos
-
         start_grid = self.to_grid(x=start_pos[0], y=start_pos[1])
         
         path_start_to_pre_gate1, _ = route_through_array(
@@ -695,36 +728,31 @@ class MPController(Controller):
                 self.path_pre_gate2_to_past_gate2_3d, self.path_past_gate2_to_pre_gate3_3d, self.path_pre_gate3_to_past_gate3_3d,
                 self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
             ])
-        elif (obsDetected and target_gate == 0) or (obsDetected and target_gate == 1):
-            # check to make sure it isn't because of the first obstacle
-            if np.linalg.norm(pos[:2] - obstacles_pos[1][:2]) < 0.5:
-                print("trajectory calculation because of second obstacle")
-                path_start_to_artificial_point1, _ = route_through_array(
-                    cost_map, start_grid, self.artifical_pos_1_grid,
-                    fully_connected=True, geometric=True
-                )
-                path_start_to_artificial_point1_array = np.array(path_start_to_artificial_point1)
-                path_artificial_point1_to_pre_gate2, _ = route_through_array(
-                    cost_map, self.artifical_pos_1_grid, self.pre_gate_2_grid,
-                    fully_connected=True, geometric=True
-                )
-                path_artificial_point1_to_pre_gate2_array = np.array(path_artificial_point1_to_pre_gate2)
-                path_start_to_pre_gate2_world_coords = np.concatenate([np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_artificial_point1_array]), np.array([self.to_coord(gx, gy) for gx, gy in path_artificial_point1_to_pre_gate2_array])])
-                n1 = path_start_to_pre_gate2_world_coords.shape[0]
-                z1 = np.linspace(start_pos[2], gates_pos[1][2], n1)
-                path_start_to_pre_gate2_3d = np.column_stack((path_start_to_pre_gate2_world_coords, z1))
-                combined_3d_path = np.concatenate([
-                    path_start_to_pre_gate2_3d, self.path_pre_gate2_to_past_gate2_3d, self.path_past_gate2_to_pre_gate3_3d, 
-                    self.path_pre_gate3_to_past_gate3_3d, self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
-                ])
-            else:
-                #first obstacle
-                combined_3d_path = np.concatenate([
-                    self.path_start_to_pre_gate1_3d, self.path_pre_gate1_to_past_gate1_3d, self.path_past_gate1_3d_to_pre_gate2_3d,
-                    self.path_pre_gate2_to_past_gate2_3d, self.path_past_gate2_to_pre_gate3_3d, self.path_pre_gate3_to_past_gate3_3d,
-                    self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
-                ])
-        elif target_gate == 1 and gateDetected:
+        elif (obsDetected and target_gate == 0):
+            print("trajectory calculation because of second obstacle")
+            path_start_to_past_gate1, _ = route_through_array(
+                cost_map, start_grid, self.past_gate_1_grid,
+                fully_connected=True, geometric=True
+            )
+            path_start_to_past_gate1_array = np.array(path_start_to_past_gate1)
+            path_start_to_past_gate1_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_past_gate1_array])
+            n1 = path_start_to_past_gate1_world_coords.shape[0]
+            z1 = np.linspace(start_pos[2], gates_pos[0][2], n1)
+            path_start_to_past_gate1_3d = np.column_stack((path_start_to_past_gate1_world_coords, z1))
+            combined_3d_path = np.concatenate([
+                path_start_to_past_gate1_3d, self.path_past_gate1_3d_to_pre_gate2_3d,
+                self.path_pre_gate2_to_past_gate2_3d, self.path_past_gate2_to_pre_gate3_3d, self.path_pre_gate3_to_past_gate3_3d,
+                self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
+            ])
+            #else:
+            #    print("trajectory calculation because of first obstacle")
+            #    #first obstacle
+            #    combined_3d_path = np.concatenate([
+            #        self.path_start_to_pre_gate1_3d, self.path_pre_gate1_to_past_gate1_3d, self.path_past_gate1_3d_to_pre_gate2_3d,
+            #        self.path_pre_gate2_to_past_gate2_3d, self.path_past_gate2_to_pre_gate3_3d, self.path_pre_gate3_to_past_gate3_3d,
+            #        self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
+            #    ])
+        elif (target_gate == 1 and gateDetected):
             print("trajectory calculation because of second gate")
             path_start_to_past_gate2, _ = route_through_array(
                 cost_map, start_grid, self.past_gate_2_grid,
@@ -739,7 +767,7 @@ class MPController(Controller):
                 path_start_to_past_gate2_3d, self.path_past_gate2_to_pre_gate3_3d, self.path_pre_gate3_to_past_gate3_3d,
                 self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
             ])
-        elif target_gate == 2 and gateDetected:
+        elif target_gate == 2 and gateDetected or target_gate == 2 and obsDetected:
             print("trajectory calculation because of third gate")
             path_start_to_past_gate3, _ = route_through_array(
                 cost_map, start_grid, self.past_gate_3_grid,
@@ -753,19 +781,32 @@ class MPController(Controller):
             combined_3d_path = np.concatenate([
                 path_start_to_past_gate3_3d, self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
             ])
-        elif (obsDetected and target_gate == 2):
-            path_start_to_artificial_point2, _ = route_through_array(
-                cost_map, start_grid, self.artificial_pos_2_grid,
+        elif target_gate == 3:
+            path_start_to_pre_gate4, _ = route_through_array(
+                cost_map, start_grid, self.pre_gate_4_grid,
                 fully_connected=True, geometric=True
             )
-            path_start_to_artificial_point2_array = np.array(path_start_to_artificial_point2)
-            path_start_to_pre_gate_4_world_coords = np.concatenate([np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_artificial_point2_array]), np.array([self.to_coord(gx, gy) for gx, gy in self.path_artificial_point2_to_pre_gate4_array])])
+            path_start_to_pre_gate_4_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_pre_gate4])
             n1 = path_start_to_pre_gate_4_world_coords.shape[0]
             z1 = np.linspace(start_pos[2], gates_pos[3][2], n1)
             path_start_to_pre_gate4_3d = np.column_stack((path_start_to_pre_gate_4_world_coords, z1))
             combined_3d_path = np.concatenate([
                 path_start_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
             ])
+        #elif (obsDetected and target_gate == 2):
+        #    path_start_to_artificial_point2, _ = route_through_array(
+        #        cost_map, start_grid, self.artificial_pos_2_grid,
+        #        fully_connected=True, geometric=True
+        #    )
+        #    path_start_to_artificial_point2_array = np.array(path_start_to_artificial_point2)
+        #    path_start_to_pre_gate_4_world_coords = np.concatenate([np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_artificial_point2_array]), np.array([self.to_coord(gx, gy) for gx, gy in self.path_artificial_point2_to_pre_gate4_array])])
+        #    n1 = path_start_to_pre_gate_4_world_coords.shape[0]
+        #    z1 = np.linspace(start_pos[2], gates_pos[3][2], n1)
+        #    path_start_to_pre_gate4_3d = np.column_stack((path_start_to_pre_gate_4_world_coords, z1))
+        #    combined_3d_path = np.concatenate([
+        #        path_start_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
+        #    ])
+        """
         elif obsDetected and target_gate == 3:
             #two cases: either obstacle 3 or 4, if obs 3 go to artificial point, if obs 4 -> don't use artificial point
             if np.linalg.norm(pos[:2] - obstacles_pos[3][:2]) < 0.5:
@@ -805,8 +846,10 @@ class MPController(Controller):
             combined_3d_path = np.concatenate([
                 path_start_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
             ])
+        """
         
-        reduced_3d_path = combined_3d_path[::20]
+        reduced_3d_path = combined_3d_path[::4]
+        
         #num_points = reduced_3d_path.shape[0]
         self.waypoints = reduced_3d_path
 
@@ -814,24 +857,116 @@ class MPController(Controller):
         cs_x = CubicSpline(ts, self.waypoints[:, 0])
         cs_y = CubicSpline(ts, self.waypoints[:, 1])
         cs_z = CubicSpline(ts, self.waypoints[:, 2])
-
+        
+        # Store points for plotting
+        self.full_traj = np.stack((cs_x(ts), cs_y(ts), cs_z(ts)), axis=-1)  # shape (T, 3)
+        
         # Generate trajectory at controller frequency
-        ts = np.linspace(0, 1, int(self.freq * self.des_completion_time))
+        print(f"desired completion time is: {self.des_completion_time}")
+        print(f"remaining time is: {self.des_completion_time- tau}")
+        ts = np.linspace(0, 1, int(self.freq * (self.des_completion_time-tau)))
         self.x_des = cs_x(ts)
         self.y_des = cs_y(ts)
         self.z_des = cs_z(ts)
 
+        
+        if self.prev_x_des is not None:
+            print("applying smoothing")
+            num_transition_points = min(self.transition_length, len(self.prev_x_des) - self._tick)
+            if num_transition_points > 0:
+                """
+                # Get the remaining portion of old trajectory from current MPC position
+                old_x_remaining = self.prev_x_des[self._tick:self._tick + num_transition_points]
+                old_y_remaining = self.prev_y_des[self._tick:self._tick + num_transition_points]
+                old_z_remaining = self.prev_z_des[self._tick:self._tick + num_transition_points]
+                
+                # Get corresponding section from new trajectory
+                new_x_for_blend = self.x_des[:num_transition_points]
+                new_y_for_blend = self.y_des[:num_transition_points]
+                new_z_for_blend = self.z_des[:num_transition_points]
+                
+                # Create blending weights (0 = old, 1 = new)
+                blend_weights = np.linspace(0, 1, num_transition_points)
+                
+                # Blend the trajectories
+                blended_x = np.zeros_like(old_x_remaining)
+                blended_y = np.zeros_like(old_y_remaining)
+                blended_z = np.zeros_like(old_z_remaining)
+                
+                for i in range(num_transition_points):
+                    w = blend_weights[i]
+                    blended_x[i] = (1 - w) * old_x_remaining[i] + w * new_x_for_blend[i]
+                    blended_y[i] = (1 - w) * old_y_remaining[i] + w * new_y_for_blend[i]
+                    blended_z[i] = (1 - w) * old_z_remaining[i] + w * new_z_for_blend[i]
+                
+                # Combine blended section with rest of new trajectory
+                smooth_x_des = np.concatenate([blended_x, self.x_des[num_transition_points:]])
+                smooth_y_des = np.concatenate([blended_y, self.y_des[num_transition_points:]])
+                smooth_z_des = np.concatenate([blended_z, self.z_des[num_transition_points:]])
+                """
+                # Get the remaining portion of old trajectory from current MPC position
+                old_x_remaining = self.prev_x_des[self._tick:self._tick + num_transition_points]
+                old_y_remaining = self.prev_y_des[self._tick:self._tick + num_transition_points]
+                old_z_remaining = self.prev_z_des[self._tick:self._tick + num_transition_points]
+                
+                # Get corresponding section from new trajectory
+                new_x_for_blend = self.x_des[:num_transition_points]
+                new_y_for_blend = self.y_des[:num_transition_points]
+                new_z_for_blend = self.z_des[:num_transition_points]
+
+                extended_length = int(num_transition_points * self.slowdown_factor)
+                extended_weights = np.linspace(0, 1, extended_length)
+                
+                # Interpolate both old and new trajectories to extended length
+                old_interp_x = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), old_x_remaining)
+                old_interp_y = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), old_y_remaining)
+                old_interp_z = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), old_z_remaining)
+                
+                new_interp_x = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), new_x_for_blend)
+                new_interp_y = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), new_y_for_blend)
+                new_interp_z = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), new_z_for_blend)
+                
+                # Blend the extended trajectories
+                blended_x = (1 - extended_weights) * old_interp_x + extended_weights * new_interp_x
+                blended_y = (1 - extended_weights) * old_interp_y + extended_weights * new_interp_y
+                blended_z = (1 - extended_weights) * old_interp_z + extended_weights * new_interp_z
+                
+                # Combine with rest of new trajectory
+                smooth_x_des = np.concatenate([blended_x, self.x_des[num_transition_points:]])
+                smooth_y_des = np.concatenate([blended_y, self.y_des[num_transition_points:]])
+                smooth_z_des = np.concatenate([blended_z, self.z_des[num_transition_points:]])
+                
+                self.x_des = smooth_x_des
+                self.y_des = smooth_y_des
+                self.z_des = smooth_z_des
+        else:
+            print("no smoothing (first calculation)")
+        
+        
         # Extend trajectory for MPC horizon
         self.x_des = np.concatenate((self.x_des, [self.x_des[-1]] * (2 * self.N + 1)))
         self.y_des = np.concatenate((self.y_des, [self.y_des[-1]] * (2 * self.N + 1)))
         self.z_des = np.concatenate((self.z_des, [self.z_des[-1]] * (2 * self.N + 1)))
 
+        self.prev_x_des = self.x_des
+        self.prev_y_des = self.y_des
+        self.prev_z_des = self.z_des
+
         # Reset trajectory tracking
         self._tick = 0
         self.finished = False
-
 
         end = time.time()
         print("trajectory updated!")
         print("Execution time:", (end - start) * 1e3, "ms")
         return reduced_3d_path
+    
+    def get_trajectory_and_mpc_horizon(self) -> tuple[np.ndarray, np.ndarray]:
+        """Retrieve the full trajectory and the MPC horizon for drawing in sim.py.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: A tuple containing the full trajectory and the MPC horizon.
+        """
+        return self.full_traj, self.mpc_horizon
+
+    
