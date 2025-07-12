@@ -248,7 +248,7 @@ class MPController(Controller):
         # frequency is 50 Hz, so 0.02 ms timesteps
         self._tick = 0
 
-        self.des_completion_time = 12.5
+        self.des_completion_time = 8.0
         self.slowdown_factor = 1.0
         self.N = 40
         self.T_HORIZON = 2.0
@@ -258,6 +258,9 @@ class MPController(Controller):
         self.prev_y_des = None
         self.prev_z_des = None
         self.first_gate_recomputed = False
+        self.test_x = np.zeros(self.N+1)
+        self.test_y = np.zeros(self.N+1)
+        self.test_z = np.zeros(self.N+1)
 
         self.last_known_gates_pos = obs["gates_pos"]
         self.last_known_obstacles_pos = obs["obstacles_pos"]
@@ -345,6 +348,9 @@ class MPController(Controller):
         self.acados_ocp_solver.set(0, "ubx", xcurrent)
 
         for j in range(self.N):
+            self.test_x[j] = self.x_des[i + j]
+            self.test_y[j] = self.y_des[i + j]
+            self.test_z[j] = self.z_des[i + j]
             yref = np.array(
                 [
                     self.x_des[i + j],
@@ -368,6 +374,9 @@ class MPController(Controller):
                 ]
             )
             self.acados_ocp_solver.set(j, "yref", yref)
+        self.test_x[self.N] = self.x_des[i + self.N]
+        self.test_y[self.N] = self.y_des[i + self.N]
+        self.test_z[self.N] = self.z_des[i + self.N]
         yref_N = np.array(
             [
                 self.x_des[i + self.N],
@@ -565,9 +574,6 @@ class MPController(Controller):
         gates  = self.create_gates_dict(gates_pos, gates_quat)
         cost_map = self.construct_cost_map(obstacles_pos, gates)
 
-        self._tick = 0
-        self.finished = False
-
         pre_gate_grids = []
         pos_gate_grids = []
         for i, (gate_pos, gate_quat) in enumerate(zip(gates_pos, gates_quat)):
@@ -762,19 +768,51 @@ class MPController(Controller):
             ])
         elif (target_gate == 1 and gateDetected):
             print("trajectory calculation because of second gate")
-            path_start_to_pre_gate2, _ = route_through_array(
-                cost_map, start_grid, self.pre_gate_2_grid,
-                fully_connected=True, geometric=True
-            )
-            path_start_to_pre_gate2_array = np.array(path_start_to_pre_gate2)
-            path_start_to_pre_gate2_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_pre_gate2_array])
-            n1 = path_start_to_pre_gate2_world_coords.shape[0]
-            z1 = np.linspace(start_pos[2], gates_pos[1][2], n1)
-            path_start_to_pre_gate2_3d = np.column_stack((path_start_to_pre_gate2_world_coords, z1))
-            self.combined_3d_path = np.concatenate([
-                path_start_to_pre_gate2_3d, self.path_pre_gate2_to_past_gate2_3d, self.path_past_gate2_to_pre_gate3_3d, self.path_pre_gate3_to_past_gate3_3d,
-                self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
-            ])
+            if np.linalg.norm(pos[:2] - gates_pos[0][:2]) < 0.2:
+                print("Drone is still close to the first gate, include artificial point!")
+                path_start_to_artificial_point_1, _ = route_through_array(
+                    cost_map, start_grid, self.artifical_pos_1_grid,
+                    fully_connected=True, geometric=True
+                )
+                path_start_to_artificial_point_1_array = np.array(path_start_to_artificial_point_1)
+                # Path from artificial point 1 to pre-gate 2
+                path_artificial_point1_to_pre_gate2, _ = route_through_array(
+                    cost_map, self.artifical_pos_1_grid, self.pre_gate_2_grid,
+                    fully_connected=True, geometric=True
+                )
+                path_artificial_point1_to_pre_gate2_array = np.array(path_artificial_point1_to_pre_gate2)
+                path_start_to_pre_gate2_world_coords = np.concatenate([np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_artificial_point_1_array]), np.array([self.to_coord(gx, gy) for gx, gy in path_artificial_point1_to_pre_gate2_array])])
+                n1 = path_start_to_pre_gate2_world_coords.shape[0]
+                z1 = np.linspace(start_pos[2], gates_pos[1][2], n1)
+                path_start_to_pre_gate2_3d = np.column_stack((path_start_to_pre_gate2_world_coords, z1))
+                # Path from pre-gate 2 to past gate 2
+                path_pre_gate2_to_past_gate2, _ = route_through_array(
+                    cost_map, self.pre_gate_2_grid, self.past_gate_2_grid,
+                    fully_connected=True, geometric=True
+                )
+                path_pre_gate2_to_past_gate2_array = np.array(path_pre_gate2_to_past_gate2)
+                path_pre_gate2_to_past_gate2_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_pre_gate2_to_past_gate2_array])
+                n2 = path_pre_gate2_to_past_gate2_world_coords.shape[0]
+                z2 = np.linspace(gates_pos[1][2], gates_pos[1][2], n2)
+                self.path_pre_gate2_to_past_gate2_3d = np.column_stack((path_pre_gate2_to_past_gate2_world_coords, z2))
+                self.combined_3d_path = np.concatenate([
+                    path_start_to_pre_gate2_3d, self.path_pre_gate2_to_past_gate2_3d, self.path_past_gate2_to_pre_gate3_3d, self.path_pre_gate3_to_past_gate3_3d,
+                    self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
+                ])
+            else:
+                path_start_to_pre_gate2, _ = route_through_array(
+                    cost_map, start_grid, self.pre_gate_2_grid,
+                    fully_connected=True, geometric=True
+                )
+                path_start_to_pre_gate2_array = np.array(path_start_to_pre_gate2)
+                path_start_to_pre_gate2_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_pre_gate2_array])
+                n1 = path_start_to_pre_gate2_world_coords.shape[0]
+                z1 = np.linspace(start_pos[2], gates_pos[1][2], n1)
+                path_start_to_pre_gate2_3d = np.column_stack((path_start_to_pre_gate2_world_coords, z1))
+                self.combined_3d_path = np.concatenate([
+                    path_start_to_pre_gate2_3d, self.path_pre_gate2_to_past_gate2_3d, self.path_past_gate2_to_pre_gate3_3d, self.path_pre_gate3_to_past_gate3_3d,
+                    self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
+                ])
         elif target_gate == 2 and gateDetected or target_gate == 2 and obsDetected:
             print("trajectory calculation because of third gate")
             path_start_to_past_gate3, _ = route_through_array(
@@ -790,17 +828,49 @@ class MPController(Controller):
                 path_start_to_past_gate3_3d, self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
             ])
         elif target_gate == 3:
-            path_start_to_pre_gate4, _ = route_through_array(
-                cost_map, start_grid, self.pre_gate_4_grid,
-                fully_connected=True, geometric=True
-            )
-            path_start_to_pre_gate_4_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_pre_gate4])
-            n1 = path_start_to_pre_gate_4_world_coords.shape[0]
-            z1 = np.linspace(start_pos[2], gates_pos[3][2], n1)
-            path_start_to_pre_gate4_3d = np.column_stack((path_start_to_pre_gate_4_world_coords, z1))
-            self.combined_3d_path = np.concatenate([
-                path_start_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
-            ])
+            if obsDetected:
+                # obstacle 4 detected
+                if (obstacles_pos[3][0] < gates_pos[3][0]):
+                    # enough distance between obstacle and gate to go directly
+                    path_start_to_pre_gate4, _ = route_through_array(
+                        cost_map, start_grid, self.pre_gate_4_grid,
+                        fully_connected=True, geometric=True
+                    )
+                    path_start_to_pre_gate_4_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_pre_gate4])
+                    n1 = path_start_to_pre_gate_4_world_coords.shape[0]
+                    z1 = np.linspace(start_pos[2], gates_pos[3][2], n1)
+                    path_start_to_pre_gate4_3d = np.column_stack((path_start_to_pre_gate_4_world_coords, z1))
+                    self.combined_3d_path = np.concatenate([
+                        path_start_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
+                    ])
+                else:
+                    # use artifiicial point 2
+                    path_start_to_artificial_point_2, _ = route_through_array(
+                        cost_map, start_grid, self.artificial_pos_2_grid,
+                        fully_connected=True, geometric=True
+                    )
+                    path_artificial_point2_to_pre_gate4, _ = route_through_array(
+                        cost_map, self.artificial_pos_2_grid, self.pre_gate_4_grid,
+                        fully_connected=True, geometric=True
+                    )
+                    self.path_start_to_artificial_point2_array = np.array(path_start_to_artificial_point_2)
+                    self.path_artificial_point2_to_pre_gate4_array = np.array(path_artificial_point2_to_pre_gate4)
+                    path_start_to_pre_gate4_world_coords = np.concatenate([np.array([self.to_coord(gx, gy) for gx, gy in self.path_artificial_point2_to_pre_gate4_array]), np.array([self.to_coord(gx, gy) for gx, gy in self.path_artificial_point2_to_pre_gate4_array])])
+                    n1 = path_start_to_pre_gate4_world_coords.shape[0]
+                    z1 = np.linspace(gates_pos[0][2], gates_pos[1][2], n1)
+                    self.path_start_to_pre_gate4_3d = np.column_stack((path_start_to_pre_gate4_world_coords, z1))
+            else:
+                path_start_to_pre_gate4, _ = route_through_array(
+                    cost_map, start_grid, self.pre_gate_4_grid,
+                    fully_connected=True, geometric=True
+                )
+                path_start_to_pre_gate_4_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_pre_gate4])
+                n1 = path_start_to_pre_gate_4_world_coords.shape[0]
+                z1 = np.linspace(start_pos[2], gates_pos[3][2], n1)
+                path_start_to_pre_gate4_3d = np.column_stack((path_start_to_pre_gate_4_world_coords, z1))
+                self.combined_3d_path = np.concatenate([
+                    path_start_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
+                ])
         """
         elif obsDetected and target_gate == 3:
             #two cases: either obstacle 3 or 4, if obs 3 go to artificial point, if obs 4 -> don't use artificial point
@@ -894,7 +964,7 @@ class MPController(Controller):
         self.z_des = cs_z(ts)
         """
         
-        if self.prev_x_des is not None and True:
+        if self.prev_x_des is not None and False:
             print("applying smoothing")
             num_transition_points = min(self.transition_length, len(self.prev_x_des) - self._tick)
             if num_transition_points > 0:
@@ -968,10 +1038,22 @@ class MPController(Controller):
         else:
             print("no smoothing (first calculation)")
         
+        self._tick = 0
+        self.finished = False
+
         # Extend trajectory for MPC horizon
         self.x_des = np.concatenate((self.x_des, [self.x_des[-1]] * (2 * self.N + 1)))
         self.y_des = np.concatenate((self.y_des, [self.y_des[-1]] * (2 * self.N + 1)))
         self.z_des = np.concatenate((self.z_des, [self.z_des[-1]] * (2 * self.N + 1)))
+
+        
+        if obsDetected or gateDetected:
+            lookahead = 5
+            # Remove the first 'lookahead' values from the trajectory
+            lookahead = min(len(self.x_des) - 1, lookahead)  # Ensure lookahead is within bounds
+            self.x_des = self.x_des[lookahead:]
+            self.y_des = self.y_des[lookahead:]
+            self.z_des = self.z_des[lookahead:]
 
         self.prev_x_des = self.x_des
         self.prev_y_des = self.y_des
@@ -983,12 +1065,13 @@ class MPController(Controller):
         print("Execution time:", (end - start) * 1e3, "ms")
         return reduced_3d_path
     
-    def get_trajectory_and_mpc_horizon(self) -> tuple[np.ndarray, np.ndarray]:
+    def get_trajectory_and_mpc_horizon(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Retrieve the full trajectory and the MPC horizon for drawing in sim.py.
 
         Returns:
             tuple[np.ndarray, np.ndarray]: A tuple containing the full trajectory and the MPC horizon.
         """
-        return self.full_traj, self.mpc_horizon
+        self.test = np.stack((self.test_x, self.test_y, self.test_z), axis=-1)
+        return self.full_traj, self.mpc_horizon, self.test
 
     
