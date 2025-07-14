@@ -17,7 +17,7 @@ import numpy as np
 import scipy
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 from casadi import MX, cos, sin, vertcat
-from scipy.interpolate import CubicSpline, splev, splprep
+from scipy.interpolate import splev, splprep
 from scipy.spatial.transform import Rotation as R
 from skimage.graph import route_through_array  #type: ignore
 
@@ -248,12 +248,12 @@ class MPController(Controller):
         # frequency is 50 Hz, so 0.02 ms timesteps
         self._tick = 0
 
-        self.des_completion_time = 7.8
-        self.slowdown_factor = 1.0
+        self.des_completion_time = 7.6
+        self.slowdown_factor = 2.0
         self.N = 40
         self.T_HORIZON = 2.0
         self.dt = self.T_HORIZON / self.N
-        self.transition_length = 10
+        self.transition_length = 3
         self.prev_x_des = None
         self.prev_y_des = None
         self.prev_z_des = None
@@ -423,6 +423,8 @@ class MPController(Controller):
             obs: The current observation of the environment, including positions of obstacles and gates.
             t: The current time in the trajectory.
             target_gate: The index of the target gate.
+            obsDetected: True if the recalculation is done because of an obstacle
+            gateDetected: True if the recalculation is done because of a gate
 
         Returns:
             None
@@ -566,6 +568,8 @@ class MPController(Controller):
             tau: Current time in the trajectory, used as starting time.
             target_gate: Index of the target gate.
             vel: The current velocity.
+            obsDetected: True if the recalculation is done because of an obstacle
+            gateDetected: True if the recalculation is done because of a gate
 
         Returns:
             A list of waypoints.
@@ -599,7 +603,7 @@ class MPController(Controller):
         path_start_to_gate1 = np.array(path_start_to_pre_gate1)
         path_start_to_pre_gate1_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_gate1])
         n1 = path_start_to_pre_gate1_world_coords.shape[0]
-        z1 = np.linspace(start_pos[2], gates_pos[0][2], n1)
+        z1 = np.linspace(start_pos[2], gates_pos[0][2]-0.05, n1)
         self.path_start_to_pre_gate1_3d = np.column_stack((path_start_to_pre_gate1_world_coords, z1))
 
         
@@ -612,7 +616,7 @@ class MPController(Controller):
         path_pre_gate1_to_past_gate1_array = np.array(path_pre_gate1_to_past_gate1)
         path_pre_gate1_to_past_gate1_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_pre_gate1_to_past_gate1_array])
         n1 = path_pre_gate1_to_past_gate1_world_coords.shape[0]
-        z1 = np.linspace(gates_pos[0][2], gates_pos[0][2], n1)
+        z1 = np.linspace(gates_pos[0][2]-0.05, gates_pos[0][2]-0.05, n1)
         self.path_pre_gate1_to_past_gate1_3d = np.column_stack((path_pre_gate1_to_past_gate1_world_coords, z1))
 
         # Path from past gate 1 to artificial point 1
@@ -629,7 +633,7 @@ class MPController(Controller):
         path_artificial_point1_to_pre_gate2_array = np.array(path_artificial_point1_to_pre_gate2)
         path_artificial_point1_to_pre_gate2_world_coords = np.concatenate([np.array([self.to_coord(gx, gy) for gx, gy in path_past_gate1_to_artificial_point1_array]), np.array([self.to_coord(gx, gy) for gx, gy in path_artificial_point1_to_pre_gate2_array])])
         n1 = path_artificial_point1_to_pre_gate2_world_coords.shape[0]
-        z1 = np.linspace(gates_pos[0][2], gates_pos[1][2], n1)
+        z1 = np.linspace(gates_pos[0][2]-0.05, gates_pos[1][2], n1)
         self.path_past_gate1_3d_to_pre_gate2_3d = np.column_stack((path_artificial_point1_to_pre_gate2_world_coords, z1))
 
         # Path from pre-gate 2 to past gate 2
@@ -651,7 +655,7 @@ class MPController(Controller):
         path_past_gate2_to_pre_gate3_array = np.array(path_past_gate2_to_pre_gate3)
         path_past_gate2_to_pre_gate3_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_past_gate2_to_pre_gate3_array])
         n2_to_3 = path_past_gate2_to_pre_gate3_world_coords.shape[0]
-        z2_to_3 = np.linspace(gates_pos[1][2], gates_pos[2][2], n2_to_3)
+        z2_to_3 = np.linspace(gates_pos[1][2], gates_pos[2][2]-0.05, n2_to_3)
         self.path_past_gate2_to_pre_gate3_3d = np.column_stack((path_past_gate2_to_pre_gate3_world_coords, z2_to_3))
 
         # Path from pre-gate 3 to past gate 3
@@ -662,7 +666,7 @@ class MPController(Controller):
         path_pre_gate3_to_past_gate3_array = np.array(path_pre_gate3_to_past_gate3)
         path_pre_gate3_to_past_gate3_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_pre_gate3_to_past_gate3_array])
         n3 = path_pre_gate3_to_past_gate3_world_coords.shape[0]
-        z3 = np.linspace(gates_pos[2][2], gates_pos[2][2], n3)
+        z3 = np.linspace(gates_pos[2][2]-0.05, gates_pos[2][2]-0.05, n3)
         self.path_pre_gate3_to_past_gate3_3d = np.column_stack((path_pre_gate3_to_past_gate3_world_coords, z3))
 
         path_past_gate3_to_artificial_point2, _ = route_through_array(
@@ -678,7 +682,7 @@ class MPController(Controller):
         self.path_artificial_point2_to_pre_gate4_array = np.array(path_artificial_point2_to_pre_gate4)
         path_artificial_point2_to_pre_gate4_world_coords = np.concatenate([np.array([self.to_coord(gx, gy) for gx, gy in path_past_gate3_to_artificial_point3_array]), np.array([self.to_coord(gx, gy) for gx, gy in self.path_artificial_point2_to_pre_gate4_array])])
         n1 = path_artificial_point2_to_pre_gate4_world_coords.shape[0]
-        z1 = np.linspace(gates_pos[0][2], gates_pos[1][2], n1)
+        z1 = np.linspace(gates_pos[0][2]-0.05, gates_pos[1][2], n1)
         self.path_past_gate3_to_pre_gate4_3d = np.column_stack((path_artificial_point2_to_pre_gate4_world_coords, z1))
 
         # Path from pre-gate 4 to past gate 4
@@ -711,7 +715,7 @@ class MPController(Controller):
                 path_start_to_past_gate1_array = np.array(path_start_to_past_gate1)
                 path_start_to_past_gate1_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_past_gate1_array])
                 n1 = path_start_to_past_gate1_world_coords.shape[0]
-                z1 = np.linspace(start_pos[2], gates_pos[0][2], n1)
+                z1 = np.linspace(start_pos[2], gates_pos[0][2]-0.05, n1)
                 path_start_to_past_gate1_3d = np.column_stack((path_start_to_past_gate1_world_coords, z1))
                 self.combined_3d_path = np.concatenate([
                     path_start_to_past_gate1_3d, self.path_past_gate1_3d_to_pre_gate2_3d,
@@ -759,7 +763,7 @@ class MPController(Controller):
             path_start_to_past_gate1_array = np.array(path_start_to_past_gate1)
             path_start_to_past_gate1_world_coords = np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_past_gate1_array])
             n1 = path_start_to_past_gate1_world_coords.shape[0]
-            z1 = np.linspace(start_pos[2], gates_pos[0][2], n1)
+            z1 = np.linspace(start_pos[2], gates_pos[0][2]-0.05, n1)
             path_start_to_past_gate1_3d = np.column_stack((path_start_to_past_gate1_world_coords, z1))
             self.combined_3d_path = np.concatenate([
                 path_start_to_past_gate1_3d, self.path_past_gate1_3d_to_pre_gate2_3d,
@@ -822,7 +826,7 @@ class MPController(Controller):
             path_start_to_pre_gate3_array = np.array(path_start_to_pre_gate3)
             path_start_to_past_gate3_world_coords = np.concatenate([np.array([self.to_coord(gx, gy) for gx, gy in path_start_to_pre_gate3_array]), np.array([self.to_coord(gx, gy) for gx, gy in path_pre_gate3_to_past_gate3])])
             n1 = path_start_to_past_gate3_world_coords.shape[0]
-            z1 = np.linspace(start_pos[2], gates_pos[2][2], n1)
+            z1 = np.linspace(start_pos[2], gates_pos[2][2]-0.05, n1)
             path_start_to_past_gate3_3d = np.column_stack((path_start_to_past_gate3_world_coords, z1))
             self.combined_3d_path = np.concatenate([
                 path_start_to_past_gate3_3d, self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
@@ -857,7 +861,7 @@ class MPController(Controller):
                     self.path_artificial_point2_to_pre_gate4_array = np.array(path_artificial_point2_to_pre_gate4)
                     path_start_to_pre_gate4_world_coords = np.concatenate([np.array([self.to_coord(gx, gy) for gx, gy in self.path_artificial_point2_to_pre_gate4_array]), np.array([self.to_coord(gx, gy) for gx, gy in self.path_artificial_point2_to_pre_gate4_array])])
                     n1 = path_start_to_pre_gate4_world_coords.shape[0]
-                    z1 = np.linspace(gates_pos[0][2], gates_pos[1][2], n1)
+                    z1 = np.linspace(gates_pos[0][2]-0.05, gates_pos[1][2], n1)
                     self.path_start_to_pre_gate4_3d = np.column_stack((path_start_to_pre_gate4_world_coords, z1))
             else:
                 path_start_to_pre_gate4, _ = route_through_array(
@@ -914,33 +918,23 @@ class MPController(Controller):
         """
         
         reduced_3d_path = self.combined_3d_path[::4]
-        
-        #num_points = reduced_3d_path.shape[0]
         self.waypoints = reduced_3d_path
-
 
         #use b splines instead of cubic splines:
         tck, u = splprep([self.waypoints[:, 0], self.waypoints[:, 1], self.waypoints[:, 2]], 
                  s=0.1,  # smoothing factor
                  k=3) 
         
-        # Create a wrapper function that mimics your cs_x, cs_y, cs_z interface
-        def evaluate_spline(t_values):
-            """Evaluate B-spline at given parameter values (0 to 1)"""
+        def evaluate_spline(t_values: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            """Evaluate B-spline at given parameter values (0 to 1)."""
             x_vals, y_vals, z_vals = splev(t_values, tck)
             return x_vals, y_vals, z_vals
 
-        # Store points for plotting (same as before)
-        ts = np.linspace(0, 1, len(self.waypoints) * 5)  # or whatever resolution you want
+        ts = np.linspace(0, 1, len(self.waypoints) * 5)
         x_full, y_full, z_full = evaluate_spline(ts)
-        self.full_traj = np.stack((x_full, y_full, z_full), axis=-1)  # shape (T, 3)
+        self.full_traj = np.stack((x_full, y_full, z_full), axis=-1)
 
-        # Generate trajectory at controller frequency (same pattern as before)
-        #print(f"desired completion time is: {self.des_completion_time}")
-        #print(f"remaining time is: {self.des_completion_time - tau}")
         ts = np.linspace(0, 1, int(self.freq * (self.des_completion_time - tau)))
-        # Reset trajectory tracking
-        
         
         self.x_des, self.y_des, self.z_des = evaluate_spline(ts)
 
@@ -960,84 +954,6 @@ class MPController(Controller):
         self.x_des = cs_x(ts)
         self.y_des = cs_y(ts)
         self.z_des = cs_z(ts)
-        
-        
-        if self.prev_x_des is not None and False:
-            #print("applying smoothing")
-            num_transition_points = min(self.transition_length, len(self.prev_x_des) - self._tick)
-            if num_transition_points > 0:
-                
-                ### '''
-
-                # Get the remaining portion of old trajectory from current MPC position
-                old_x_remaining = self.prev_x_des[self._tick:self._tick + num_transition_points]
-                old_y_remaining = self.prev_y_des[self._tick:self._tick + num_transition_points]
-                old_z_remaining = self.prev_z_des[self._tick:self._tick + num_transition_points]
-                
-                # Get corresponding section from new trajectory
-                new_x_for_blend = self.x_des[:num_transition_points]
-                new_y_for_blend = self.y_des[:num_transition_points]
-                new_z_for_blend = self.z_des[:num_transition_points]
-                
-                # Create blending weights (0 = old, 1 = new)
-                blend_weights = np.linspace(0, 1, num_transition_points)
-                
-                # Blend the trajectories
-                blended_x = np.zeros_like(old_x_remaining)
-                blended_y = np.zeros_like(old_y_remaining)
-                blended_z = np.zeros_like(old_z_remaining)
-                
-                for i in range(num_transition_points):
-                    w = blend_weights[i]
-                    blended_x[i] = (1 - w) * old_x_remaining[i] + w * new_x_for_blend[i]
-                    blended_y[i] = (1 - w) * old_y_remaining[i] + w * new_y_for_blend[i]
-                    blended_z[i] = (1 - w) * old_z_remaining[i] + w * new_z_for_blend[i]
-                
-                # Combine blended section with rest of new trajectory
-                smooth_x_des = np.concatenate([blended_x, self.x_des[num_transition_points:]])
-                smooth_y_des = np.concatenate([blended_y, self.y_des[num_transition_points:]])
-                smooth_z_des = np.concatenate([blended_z, self.z_des[num_transition_points:]])
-                
-                ### '''
-
-                # Get the remaining portion of old trajectory from current MPC position
-                old_x_remaining = self.prev_x_des[self._tick:self._tick + num_transition_points]
-                old_y_remaining = self.prev_y_des[self._tick:self._tick + num_transition_points]
-                old_z_remaining = self.prev_z_des[self._tick:self._tick + num_transition_points]
-                
-                # Get corresponding section from new trajectory
-                new_x_for_blend = self.x_des[:num_transition_points]
-                new_y_for_blend = self.y_des[:num_transition_points]
-                new_z_for_blend = self.z_des[:num_transition_points]
-
-                extended_length = int(num_transition_points * self.slowdown_factor)
-                extended_weights = np.linspace(0, 1, extended_length)
-                
-                # Interpolate both old and new trajectories to extended length
-                old_interp_x = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), old_x_remaining)
-                old_interp_y = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), old_y_remaining)
-                old_interp_z = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), old_z_remaining)
-                
-                new_interp_x = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), new_x_for_blend)
-                new_interp_y = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), new_y_for_blend)
-                new_interp_z = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), new_z_for_blend)
-                
-                # Blend the extended trajectories
-                blended_x = (1 - extended_weights) * old_interp_x + extended_weights * new_interp_x
-                blended_y = (1 - extended_weights) * old_interp_y + extended_weights * new_interp_y
-                blended_z = (1 - extended_weights) * old_interp_z + extended_weights * new_interp_z
-                
-                # Combine with rest of new trajectory
-                smooth_x_des = np.concatenate([blended_x, self.x_des[num_transition_points:]])
-                smooth_y_des = np.concatenate([blended_y, self.y_des[num_transition_points:]])
-                smooth_z_des = np.concatenate([blended_z, self.z_des[num_transition_points:]])
-
-                self.x_des = smooth_x_des
-                self.y_des = smooth_y_des
-                self.z_des = smooth_z_des
-        else:
-            print("no smoothing")
-    
         """
 
         # Extend trajectory for MPC horizon
@@ -1077,6 +993,48 @@ class MPController(Controller):
             self.x_des = self.x_des[lookahead:]
             self.y_des = self.y_des[lookahead:]
             self.z_des = self.z_des[lookahead:]
+
+        if self.prev_x_des is not None and False:
+            #print("applying smoothing")
+            num_transition_points = min(self.transition_length, len(self.prev_x_des) - self._tick)
+            if num_transition_points > 0:
+                # Get the remaining portion of old trajectory from current MPC position
+                old_x_remaining = self.prev_x_des[self._tick + 1:self._tick + 1 + num_transition_points]
+                old_y_remaining = self.prev_y_des[self._tick + 1:self._tick + 1 + num_transition_points]
+                old_z_remaining = self.prev_z_des[self._tick + 1:self._tick + 1 + num_transition_points]
+                
+                # Get corresponding section from new trajectory
+                new_x_for_blend = self.x_des[:num_transition_points]
+                new_y_for_blend = self.y_des[:num_transition_points]
+                new_z_for_blend = self.z_des[:num_transition_points]
+
+                extended_length = int(num_transition_points * self.slowdown_factor)
+                extended_weights = np.linspace(0, 1, extended_length)
+                
+                # Interpolate both old and new trajectories to extended length
+                old_interp_x = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), old_x_remaining)
+                old_interp_y = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), old_y_remaining)
+                old_interp_z = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), old_z_remaining)
+                
+                new_interp_x = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), new_x_for_blend)
+                new_interp_y = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), new_y_for_blend)
+                new_interp_z = np.interp(extended_weights, np.linspace(0, 1, num_transition_points), new_z_for_blend)
+                
+                # Blend the extended trajectories
+                blended_x = (1 - extended_weights) * old_interp_x + extended_weights * new_interp_x
+                blended_y = (1 - extended_weights) * old_interp_y + extended_weights * new_interp_y
+                blended_z = (1 - extended_weights) * old_interp_z + extended_weights * new_interp_z
+                
+                # Combine with rest of new trajectory
+                smooth_x_des = np.concatenate([blended_x, self.x_des[num_transition_points:]])
+                smooth_y_des = np.concatenate([blended_y, self.y_des[num_transition_points:]])
+                smooth_z_des = np.concatenate([blended_z, self.z_des[num_transition_points:]])
+
+                self.x_des = smooth_x_des
+                self.y_des = smooth_y_des
+                self.z_des = smooth_z_des
+        else:
+            print("no smoothing")
 
         self._tick = 0
         self.finished = False
