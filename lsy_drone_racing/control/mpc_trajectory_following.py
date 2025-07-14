@@ -248,7 +248,7 @@ class MPController(Controller):
         # frequency is 50 Hz, so 0.02 ms timesteps
         self._tick = 0
 
-        self.des_completion_time = 7.6
+        self.des_completion_time = 7.5
         self.slowdown_factor = 2.0
         self.N = 40
         self.T_HORIZON = 2.0
