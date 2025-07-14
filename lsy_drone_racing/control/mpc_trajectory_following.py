@@ -248,7 +248,7 @@ class MPController(Controller):
         # frequency is 50 Hz, so 0.02 ms timesteps
         self._tick = 0
 
-        self.des_completion_time = 8.0
+        self.des_completion_time = 7.8
         self.slowdown_factor = 1.0
         self.N = 40
         self.T_HORIZON = 2.0
@@ -1039,9 +1039,6 @@ class MPController(Controller):
             print("no smoothing")
     
         """
-        
-        self._tick = 0
-        self.finished = False
 
         # Extend trajectory for MPC horizon
         self.x_des = np.concatenate((self.x_des, [self.x_des[-1]] * (2 * self.N + 1)))
@@ -1050,12 +1047,39 @@ class MPController(Controller):
 
         
         if obsDetected or gateDetected:
-            lookahead = 5
+            self.next_x_in_prev_traj = self.prev_x_des[self._tick+1]
+            self.next_y_in_prev_traj = self.prev_y_des[self._tick+1]
+            self.next_z_in_prev_traj = self.prev_z_des[self._tick+1]
+
+            # Goal: find the closest point to [self.next_x_in_prev_traj, self.next_y_in_prev_traj, self.next_z_in_prev_traj] and remove all previous values from self.x_des, self.y_des and self.z_des
+            search_window = min(50, len(self.x_des))
+            patience = 10
+            closest_idx = 0
+            no_improvement_count = 0
+            min_dist = np.inf
+
+            for i in range(search_window):
+                dist = ((self.x_des[i] - self.next_x_in_prev_traj)**2 +
+                           (self.y_des[i] - self.next_y_in_prev_traj)**2 +
+                           (self.z_des[i] - self.next_z_in_prev_traj)**2)
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_idx = i
+                    no_improvement_count = 0
+                else:
+                    no_improvement_count += 1
+
+                if no_improvement_count >= patience:
+                    break
+
             # Remove the first 'lookahead' values from the trajectory
-            lookahead = min(len(self.x_des) - 1, lookahead)  # Ensure lookahead is within bounds
+            lookahead = min(len(self.x_des) - 1, closest_idx)  # Ensure lookahead is within bounds
             self.x_des = self.x_des[lookahead:]
             self.y_des = self.y_des[lookahead:]
             self.z_des = self.z_des[lookahead:]
+
+        self._tick = 0
+        self.finished = False
 
         self.prev_x_des = self.x_des
         self.prev_y_des = self.y_des
