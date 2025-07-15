@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import scipy
-from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
-from casadi import MX, cos, sin, vertcat
+from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver  # type: ignore
+from casadi import MX, cos, sin, vertcat  # type: ignore
 from scipy.interpolate import splev, splprep
 from scipy.spatial.transform import Rotation as R
 from skimage.graph import route_through_array  #type: ignore

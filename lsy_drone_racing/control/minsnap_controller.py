@@ -7,9 +7,6 @@ from typing import TYPE_CHECKING
 #import matplotlib.pyplot as plt
 import minsnap_trajectories as ms  # type: ignore
 import numpy as np
-from scipy.interpolate import CubicSpline
-
-#from scipy.interpolate import BSpline, make_interp_spline
 from scipy.spatial.transform import Rotation as R
 from skimage.graph import route_through_array  #type: ignore
 
@@ -238,6 +235,8 @@ class MinSnapController(Controller):
             obs: The current observation of the environment, including positions of obstacles and gates.
             t: The current time in the trajectory.
             target_gate: The index of the target gate.
+            obsDetected: Whether an obstacle has been detected.
+            gateDetected: Whether a gate has been detected.
 
         Returns:
             None
@@ -377,6 +376,8 @@ class MinSnapController(Controller):
             tau: Current time in the trajectory, used as starting time.
             target_gate: Index of the target gate.
             vel: the current velocity
+            obsDetected: Whether an obstacle has been detected.
+            gateDetected: Whether a gate has been detected.
 
         Returns:
             A tuple containing the polynomial trajectory and the list of waypoints.
