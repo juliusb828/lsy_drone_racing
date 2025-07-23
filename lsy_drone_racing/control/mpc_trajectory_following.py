@@ -231,8 +231,7 @@ class MPController(Controller):
         self.freq = config.env.freq
         # frequency is 50 Hz, so 0.02 ms timesteps
         self._tick = 0
-        print(config)
-        self.des_completion_time = 7.5
+        self.des_completion_time = 7.8
         self.enable_smoothing = False
         self.transition_length = 5
         self.slowdown_factor = 1.5
