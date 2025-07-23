@@ -28,3 +28,6 @@ When recomputing the trajectory, the closest point on the new trajectory to the 
 The controller described in our report is found under 'control/mpc_trajectory_following.py'. It uses the attitude interface. This controller works in both sim and real, but struggles with reliability.
 
 Additionally, there is an old version of a controller called 'minsnap_controller.py', which uses minsnap to generate the trajectories. It uses the state interface. This controller does not work reliably in sim and was not tested in real.
+
+### Additional dependencies used
+The following dependecies are added to 'dependencies' in 'pyproject.toml: "gymnasium[array-api]", "minsnap-trajectories", "scikit-image", "casadi", "matplotlib", "pyparsing", "cython". Not all of them are still used, some are from outdated versions.

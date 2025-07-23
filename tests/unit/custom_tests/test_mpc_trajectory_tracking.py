@@ -3,12 +3,12 @@
 import sys
 from pathlib import Path
 
-import numpy as np
+#import numpy as np
 
 # Add the project root to sys.path so Python can find the package
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from types import SimpleNamespace
+#from types import SimpleNamespace
 
 #from lsy_drone_racing.control.mpc_trajectory_following import MPController  # type: ignore
 
