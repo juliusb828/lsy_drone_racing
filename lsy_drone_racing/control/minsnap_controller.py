@@ -1,3 +1,5 @@
+"""Old controller using mininum snap trajectories and state control."""
+
 from __future__ import annotations  # Python 3.10 type hints  # noqa: D100
 
 import threading
@@ -10,7 +12,6 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from skimage.graph import route_through_array  #type: ignore
 
-#from scipy.spatial.transform import Rotation as R
 from lsy_drone_racing.control import Controller
 
 if TYPE_CHECKING:
@@ -47,8 +48,6 @@ class MinSnapController(Controller):
 
         self.errors = []
         self.step_count = 0
-
-        #setup once, don't recalculate this every time
 
         gates_pos = obs["gates_pos"]
         gates_quat = obs["gates_quat"]
@@ -197,34 +196,26 @@ class MinSnapController(Controller):
             max_distance = np.max(distances)
             self.last_known_obstacles_pos = obs["obstacles_pos"]
             if max_distance > 0.08:
-                #print("recomputing trajectory")
                 self.trigger_async_recomputation(obs, self.time, target_gate, True, False)
-            #else:
-                #print("no recomputation necessary")
 
         if not np.allclose(obs["gates_pos"], self.last_known_gates_pos, atol=0.001):
             distances = np.linalg.norm(obs["gates_pos"] - self.last_known_gates_pos, axis=-1)
             max_distance = np.max(distances)
             self.last_known_gates_pos = obs["gates_pos"]
             if max_distance > 0.08:
-                #print("recomputing trajectory")
                 self.trigger_async_recomputation(obs, self.time, target_gate, False, True)
-            #else:
-                #print("no recomputation necessary")
+            
         
-        #print(tau)
         current_target_pos = self.target_positions[self._tick]
         current_target_vel = self.target_velocities[self._tick]
-        #current_target_acc = self.target_accelerations[self._tick]
         yaw = np.array([np.arctan2(current_target_vel[1], current_target_vel[0])])
 
-        if self.time == self.t_total:  # Maximum duration reached
+        if self.time == self.t_total:
             self._finished = True
 
         error_3d = np.linalg.norm(current_target_pos - obs["pos"])
         self.errors.append(error_3d)
         self.step_count += 1
-        #print(f"average error {sum(self.errors)/self.step_count}")
 
         return np.concatenate((current_target_pos, current_target_vel, np.zeros(3), yaw, np.zeros(3)), dtype=np.float32)
         
@@ -241,7 +232,7 @@ class MinSnapController(Controller):
         Returns:
             None
         """
-        # Start computation in background thread
+        # start computation in background thread
         self.trajectory_computation_thread = threading.Thread(
             target=self.compute_trajectory, 
             args=(obs["pos"], obs["gates_pos"], obs["gates_quat"], obs["obstacles_pos"], self.time, target_gate, obs["vel"], obsDetected, gateDetected)
@@ -306,23 +297,22 @@ class MinSnapController(Controller):
         Returns:
             A 2D numpy array representing the cost map.
         """
-        # Calculate map dimensions
+        # calculate map dimensions
         width = int(np.ceil((self.max_x - self.min_x) / self.resolution))
         height = int(np.ceil((self.max_y - self.min_y) / self.resolution))
         cost_map = np.ones((height, width))
         obstacle_size = 20
         gate_sides_height = 6
         
-        # Mark obstacles on the cost map
+        # mark obstacles on the cost map
         for i, (ox, oy) in enumerate(obstacles[:, :2]):
             gx, gy = self.to_grid(ox, oy)
             half_side = int(obstacle_size / 2)  # Adjust size here
             cost_map[gx - half_side:gx + half_side + 1, gy - half_side:gy + half_side + 1] = 1e6
 
-        # Mark sides of gates on the cost map
+        # mark sides of gates on the cost map
         for gate in gates:
             gate_g = self.to_grid(gate["pos"][0], gate["pos"][1])
-            # gate is 40 cm wide with 10 cm side
             if gate["rpy"][2] == 0.0 or gate["rpy"][2] == 3.14:
                 cost_map[gate_g[0]-24:gate_g[0]-8, gate_g[1]-gate_sides_height:gate_g[1]+gate_sides_height] = 1e6
                 cost_map[gate_g[0]+8:gate_g[0]+24, gate_g[1]-gate_sides_height:gate_g[1]+gate_sides_height] = 1e6
@@ -404,14 +394,12 @@ class MinSnapController(Controller):
         self.path_start_to_pre_gate1_3d = np.column_stack((path_start_to_pre_gate1_world_coords, z1))
 
         if target_gate == 0 and not gateDetected and not obsDetected:
-            print("trajectory calculation pre gate 1")
             combined_3d_path = np.concatenate([
                 self.path_start_to_pre_gate1_3d, self.path_pre_gate1_to_past_gate1_3d, self.path_past_gate1_3d_to_pre_gate2_3d,
                 self.path_pre_gate2_to_past_gate2_3d, self.path_past_gate2_to_pre_gate3_3d, self.path_pre_gate3_to_past_gate3_3d,
                 self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
             ])
         elif target_gate == 0 and gateDetected:
-            print("trajectory calculation at gate 1 (detected gate 1)")
             path_start_to_past_gate1, _ = route_through_array(
                 cost_map, start_grid, self.past_gate_1_grid,
                 fully_connected=True, geometric=True
@@ -429,7 +417,6 @@ class MinSnapController(Controller):
         elif (obsDetected and target_gate == 0) or (obsDetected and target_gate == 1):
             # check to make sure it isn't because of the first obstacle
             if np.linalg.norm(pos[:2] - obstacles_pos[1][:2]) < 0.5:
-                print("trajectory calculation because of second obstacle")
                 path_start_to_artificial_point1, _ = route_through_array(
                     cost_map, start_grid, self.artifical_pos_1_grid,
                     fully_connected=True, geometric=True
@@ -456,7 +443,6 @@ class MinSnapController(Controller):
                     self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
                 ])
         elif target_gate == 1 and gateDetected:
-            print("trajectory calculation because of second gate")
             path_start_to_past_gate2, _ = route_through_array(
                 cost_map, start_grid, self.past_gate_2_grid,
                 fully_connected=True, geometric=True
@@ -471,7 +457,6 @@ class MinSnapController(Controller):
                 self.path_past_gate3_to_pre_gate4_3d, self.path_pre_gate4_to_past_gate4_3d
             ])
         elif target_gate == 2 and gateDetected:
-            print("trajectory calculation because of third gate")
             path_start_to_past_gate3, _ = route_through_array(
                 cost_map, start_grid, self.past_gate_3_grid,
                 fully_connected=True, geometric=True
@@ -562,13 +547,13 @@ class MinSnapController(Controller):
 
         polys = ms.generate_trajectory(
             waypoints,
-            degree=8,  # Polynomial degree
+            degree=8,
             idx_minimized_orders=(3, 4),
             num_continuous_orders=3,
             algorithm="closed-form",
         )
 
-        sampling_rate = 50  # Adjust sampling rate as needed
+        sampling_rate = 50  # adjust sampling rate as needed
         time_samples = np.linspace(tau, self.t_total, int((self.t_total-tau) * sampling_rate))
         pva = ms.compute_trajectory_derivatives(polys, time_samples, 3)
         target_pos = pva[0, ...]

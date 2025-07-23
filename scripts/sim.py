@@ -96,9 +96,9 @@ def simulate(
                 if ((i * fps) % config.env.freq) < fps:
                     if hasattr(controller, "get_trajectory_and_mpc_horizon"):
                         full_traj, mpc_horizon, test = controller.get_trajectory_and_mpc_horizon()
-                        #draw_line(env, full_traj, rgba=[0, 1, 0, 1])       # Green = full trajectory
+                        draw_line(env, full_traj, rgba=[0, 1, 0, 1])       # Green = full trajectory
                         try:
-                            draw_line(env, test, rgba=[1, 0, 0, 1])       # Red = full trajectory
+                            draw_line(env, test, rgba=[1, 0, 0, 1])       # Red = trajectory fed into the MPC
                             draw_line(env, mpc_horizon, rgba=[0, 0, 1, 1])  # Blue = MPC horizon
                         except np.linalg.LinAlgError:
                             # Skip drawing the line if SVD doesn't converge
